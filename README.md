@@ -27,33 +27,41 @@ A desktop pentesting methodology assistant. Load a structured checklist template
 
 ### Option 1 — Run from source
 
+**Windows**
+
+```bat
+git clone https://github.com/syogod/HackMind.git
+cd HackMind
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
+```
+
+**macOS / Linux (including Kali)**
+
+> Modern Debian-based distros (Kali, Ubuntu 23.04+) block system-wide `pip` installs — a virtual environment is required.
+
 ```bash
-# 1. Clone the repository
 git clone https://github.com/syogod/HackMind.git
 cd HackMind
 
-# 2. Create and activate a virtual environment (recommended)
-python -m venv .venv
+# Kali/Debian may need this first if python3-venv is missing:
+# sudo apt install python3-venv
 
-# Windows
-.venv\Scripts\activate
-
-# macOS / Linux
-source .venv/bin/activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Run
-python main.py
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python main.py
 ```
+
+The virtual environment only needs to be created once. On subsequent runs, just use `.venv/bin/python main.py` from the repo directory.
 
 ### Option 2 — Build a standalone executable (PyInstaller)
 
 A standalone build requires no Python installation on the target machine.
 
 ```bash
-# Install dev dependencies (includes PyInstaller)
+# Activate your venv first, then:
 pip install -r requirements-dev.txt
 
 # Windows
@@ -65,7 +73,7 @@ pyinstaller --onefile --windowed --add-data "templates:templates" --name HackMin
 
 The output executable is placed in `dist/`. Copy `dist/HackMind` (or `dist/HackMind.exe`) to any machine and run it — no Python required.
 
-> **Note:** On macOS, `--windowed` produces a `.app` bundle. On Linux you may need `--windowed` replaced with nothing if you encounter display issues under some desktop environments.
+> **Note:** On macOS, `--windowed` produces a `.app` bundle. On Linux, omit `--windowed` if you encounter display issues under some desktop environments.
 
 ---
 
