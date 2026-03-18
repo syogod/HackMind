@@ -1,0 +1,377 @@
+name: "Android Mobile App Testing"
+version: "1.0.0"
+author: "HackMind"
+description: >
+  Android application penetration testing methodology covering
+  static analysis, dynamic analysis, network traffic, data storage,
+  authentication, and inter-process communication.
+
+nodes:
+  # -------------------------------------------------------------------------
+  # Static Analysis
+  # -------------------------------------------------------------------------
+  - id: static
+    type: info
+    title: "Static Analysis"
+    content: "Analyse the APK without running it."
+    children:
+      - id: static_decompile
+        type: checklist
+        title: "Decompile the APK"
+        content: |
+          Extract and decompile the APK for source review.
+          Tools: apktool (smali), jadx (Java/Kotlin), apkx
+          - apktool d target.apk
+          - jadx -d out/ target.apk
+          - Inspect AndroidManifest.xml
+
+      - id: static_manifest
+        type: checklist
+        title: "Review AndroidManifest.xml"
+        content: |
+          Check for dangerous misconfigurations:
+          - android:debuggable="true" (should be false in release)
+          - android:allowBackup="true" (enables adb backup of app data)
+          - Exported activities, services, receivers, providers without permissions
+          - android:usesCleartextTraffic="true" (allows HTTP)
+          - Custom permissions with protectionLevel="normal"
+
+      - id: static_hardcoded_secrets
+        type: checklist
+        title: "Search for hardcoded secrets"
+        content: |
+          Grep the decompiled source for sensitive values:
+          - API keys, tokens, passwords
+          - grep -r "api_key\|secret\|password\|token\|key =" out/
+          - Check res/values/strings.xml
+          - Check BuildConfig fields
+          - Check assets/ and raw resources
+
+      - id: static_third_party_libs
+        type: checklist
+        title: "Identify third-party libraries"
+        content: |
+          Look for vulnerable or privacy-invasive SDKs.
+          - Check build.gradle dependencies (if source available)
+          - Look for known ad/analytics SDKs and their permissions
+          - Cross-reference library versions against CVE databases
+
+  # -------------------------------------------------------------------------
+  # Network Traffic
+  # -------------------------------------------------------------------------
+  - id: network
+    type: info
+    title: "Network Traffic Analysis"
+    content: "Intercept and inspect all network communication."
+    children:
+      - id: network_proxy_setup
+        type: checklist
+        title: "Configure interception proxy"
+        content: |
+          Set up Burp Suite or mitmproxy to intercept app traffic.
+          - Install Burp CA certificate on the device
+          - Configure device Wi-Fi proxy to Burp listener
+          - For Android 7+: add network_security_config.xml or patch APK
+            (apktool + insert <certificates src="user"/> + resign)
+          - Use ProxyDroid or Drony for per-app proxying
+
+      - id: network_ssl_pinning
+        type: question
+        title: "Does the app implement SSL pinning?"
+        options:
+          - label: "Yes — needs bypassing"
+            key: "yes"
+            children:
+              - id: network_ssl_bypass_frida
+                type: checklist
+                title: "Bypass SSL pinning with Frida"
+                content: |
+                  Use a Frida script to hook the pinning implementation.
+                  - Universal script: frida-codeshare.com/universal-android-ssl-pinning-bypass-2
+                  - frida -U -f com.target.app -l ssl_bypass.js --no-pause
+                  - Try objection: objection -g com.target.app explore
+                    then: android sslpinning disable
+
+              - id: network_ssl_bypass_apk_patch
+                type: checklist
+                title: "Bypass SSL pinning by patching the APK"
+                content: |
+                  Decompile, insert a permissive network security config, resign.
+                  - Add res/xml/network_security_config.xml with <trust-anchors>
+                    including <certificates src="user"/>
+                  - Reference it in AndroidManifest.xml
+                  - Resign: apksigner / jarsigner
+                  - Install patched APK
+
+          - label: "No"
+            key: "no"
+            children: []
+
+      - id: network_cleartext
+        type: checklist
+        title: "Check for cleartext HTTP traffic"
+        content: |
+          - Watch for http:// requests in proxy
+          - Check manifest for android:usesCleartextTraffic
+          - Check network_security_config.xml for cleartextTrafficPermitted
+          - Look for sensitive data sent over unencrypted connections
+
+      - id: network_sensitive_data
+        type: checklist
+        title: "Inspect traffic for sensitive data"
+        content: |
+          Review all intercepted requests/responses for:
+          - Credentials or session tokens in URL parameters
+          - PII (email, phone, location) sent unnecessarily
+          - Verbose error messages or stack traces from the server
+          - Sensitive data in custom headers
+
+  # -------------------------------------------------------------------------
+  # Data Storage
+  # -------------------------------------------------------------------------
+  - id: storage
+    type: info
+    title: "Data Storage"
+    content: "Check where and how the app stores sensitive data on-device."
+    children:
+      - id: storage_shared_prefs
+        type: checklist
+        title: "Review SharedPreferences"
+        content: |
+          SharedPreferences are stored as plaintext XML.
+          Location: /data/data/com.target.app/shared_prefs/
+          - adb shell (root) or use objection: env → files
+          - Look for tokens, passwords, user data stored in plaintext
+          - Check MODE_WORLD_READABLE (deprecated but still found)
+
+      - id: storage_sqlite
+        type: checklist
+        title: "Review SQLite databases"
+        content: |
+          Location: /data/data/com.target.app/databases/
+          - Pull with adb: adb pull /data/data/com.target.app/databases/
+          - Open with sqlite3 or DB Browser for SQLite
+          - Look for plaintext credentials, PII, session data
+          - Check if SQLCipher is used (encrypted DB)
+
+      - id: storage_external
+        type: checklist
+        title: "Check external storage usage"
+        content: |
+          Files on external/SD storage are world-readable by default.
+          - Check for use of Environment.getExternalStorageDirectory()
+          - Look for sensitive files written to /sdcard/ or /storage/
+          - Check if the app writes logs or caches to external storage
+
+      - id: storage_keystore
+        type: checklist
+        title: "Verify Android Keystore usage"
+        content: |
+          Secrets should be stored in the Android Keystore, not plaintext.
+          - Check if the app uses KeyStore / KeyGenerator / KeyPairGenerator
+          - Verify keys are not exported or backed up
+          - Check if biometric auth is tied to keystore keys correctly
+
+      - id: storage_logs
+        type: checklist
+        title: "Check for sensitive data in logs"
+        content: |
+          Debug builds often log sensitive data.
+          - adb logcat | grep -i "com.target.app"
+          - Look for tokens, passwords, PII, stack traces
+          - Use: adb logcat -s com.target.app:V
+
+  # -------------------------------------------------------------------------
+  # Authentication & Session
+  # -------------------------------------------------------------------------
+  - id: q_auth
+    type: question
+    title: "Does the app require user authentication?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: auth_token_storage
+            type: checklist
+            title: "Check how auth tokens are stored"
+            content: |
+              Tokens must not be stored in plaintext SharedPreferences or external storage.
+              - Is the Keystore used for token encryption?
+              - Is EncryptedSharedPreferences used (Jetpack Security)?
+              - Check if tokens appear in logcat
+
+          - id: auth_token_expiry
+            type: checklist
+            title: "Test token expiry and refresh"
+            content: |
+              - Do access tokens expire? How quickly?
+              - Can an expired token still be used?
+              - Is the refresh token also time-limited?
+              - Test reuse of refresh tokens after logout
+
+          - id: auth_biometric
+            type: question
+            title: "Does the app use biometric authentication?"
+            options:
+              - label: "Yes"
+                key: "yes"
+                children:
+                  - id: auth_biometric_bypass
+                    type: checklist
+                    title: "Test biometric authentication bypass"
+                    content: |
+                      - Use Frida to hook BiometricPrompt.AuthenticationCallback
+                        and force onAuthenticationSucceeded
+                      - Check if biometric is CryptoObject-backed (strong)
+                        or just a UI gate (weak — bypassable)
+                      - objection: android ui biometric_bypass
+
+              - label: "No"
+                key: "no"
+                children: []
+
+          - id: auth_logout
+            type: checklist
+            title: "Test logout and session invalidation"
+            content: |
+              - After logout, are tokens properly deleted from device storage?
+              - Are server-side sessions invalidated on logout?
+              - Can a captured token still be used after the user logs out?
+              - Test re-authentication requirement after app backgrounding
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # -------------------------------------------------------------------------
+  # Inter-Process Communication (IPC)
+  # -------------------------------------------------------------------------
+  - id: ipc
+    type: info
+    title: "Inter-Process Communication (IPC)"
+    content: "Test exported Android components for unauthorized access."
+    children:
+      - id: ipc_activities
+        type: checklist
+        title: "Test exported Activities"
+        content: |
+          Exported activities can be launched by other apps or via adb.
+          - List exported: aapt dump xmltree target.apk AndroidManifest.xml
+          - Launch via adb: adb shell am start -n com.target.app/.ActivityName
+          - Look for authentication bypass, sensitive data exposure,
+            or unintended functionality
+
+      - id: ipc_services
+        type: checklist
+        title: "Test exported Services"
+        content: |
+          - Identify exported services in manifest (exported=true or implicit intent-filter)
+          - Bind to services from a test app and send crafted Intents
+          - Look for privilege escalation or data leakage via bound service
+
+      - id: ipc_broadcast_receivers
+        type: checklist
+        title: "Test Broadcast Receivers"
+        content: |
+          - Identify exported receivers
+          - Send crafted broadcasts: adb shell am broadcast -a com.target.ACTION
+          - Check if sensitive operations are triggered without authorization
+          - Test for sticky broadcasts containing sensitive data
+
+      - id: ipc_content_providers
+        type: checklist
+        title: "Test Content Providers"
+        content: |
+          Content Providers expose data via URIs.
+          - List providers: adb shell content query --uri content://com.target.app.provider/
+          - Test for SQL injection in provider queries
+          - Test for path traversal in file providers
+          - Check if sensitive data is accessible without permissions
+
+      - id: ipc_deep_links
+        type: checklist
+        title: "Test Deep Links and Intent Filters"
+        content: |
+          - Map all intent-filter schemes/hosts from manifest
+          - Launch deep links via adb: adb shell am start -a android.intent.action.VIEW
+            -d "target://path?param=value" com.target.app
+          - Look for open redirect, XSS in WebView, auth bypass via deep link
+          - Test parameter injection in deep link handlers
+
+  # -------------------------------------------------------------------------
+  # WebView
+  # -------------------------------------------------------------------------
+  - id: q_webview
+    type: question
+    title: "Does the app use WebViews?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: webview_js_enabled
+            type: checklist
+            title: "Check JavaScript and interface settings"
+            content: |
+              - Is setJavaScriptEnabled(true) used? (required for JS execution)
+              - Is addJavascriptInterface() used? (exposes Java methods to JS)
+              - If JS interface exists, can it be called from an arbitrary page?
+              - Is the loaded URL validated/whitelisted?
+
+          - id: webview_file_access
+            type: checklist
+            title: "Test WebView file access"
+            content: |
+              - Is setAllowFileAccess(true) set? (enabled by default pre-API 30)
+              - Is setAllowFileAccessFromFileURLs(true) set? (very dangerous)
+              - Is setAllowUniversalAccessFromFileURLs(true) set? (critical)
+              - Test for file:// URI loading that leaks local app files
+
+          - id: webview_xss
+            type: checklist
+            title: "Test for XSS in WebView"
+            content: |
+              If user input is reflected into the WebView:
+              - Test classic XSS payloads
+              - If a JS interface is exposed, XSS can call native Java methods
+              - Test via deep links that load attacker-controlled URLs into WebView
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # -------------------------------------------------------------------------
+  # Binary Protections
+  # -------------------------------------------------------------------------
+  - id: binary
+    type: info
+    title: "Binary Protections"
+    content: "Check for runtime protection mechanisms."
+    children:
+      - id: binary_root_detection
+        type: checklist
+        title: "Test root detection bypass"
+        content: |
+          If the app refuses to run on rooted devices:
+          - Use Magisk with MagiskHide / Shamiko module
+          - Use Frida to hook root detection methods
+          - Use objection: android root disable
+          - Check for checks against: su binary, Superuser.apk,
+            /system/app/Superuser.apk, build tags
+
+      - id: binary_emulator_detection
+        type: checklist
+        title: "Test emulator detection bypass"
+        content: |
+          Some apps refuse to run in emulators.
+          - Use a physical device when possible
+          - Hook Build.FINGERPRINT, Build.PRODUCT checks with Frida
+          - Modify emulator properties to spoof real device values
+
+      - id: binary_obfuscation
+        type: checklist
+        title: "Assess code obfuscation"
+        content: |
+          - Is ProGuard/R8 applied? (meaningfully renamed classes/methods?)
+          - Is there native code (JNI/.so files) — harder to reverse
+          - Are string values encrypted at rest in the binary?
+          - Document obfuscation level to set expectations for static analysis depth

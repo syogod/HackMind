@@ -1,0 +1,969 @@
+name: "Thick Client Application Testing"
+version: "1.0.0"
+author: "HackMind"
+description: >
+  Thick client (desktop application) penetration testing methodology based on
+  the OWASP Desktop App Security Top 10. Covers injections, authentication,
+  sensitive data exposure, cryptography, authorization, misconfiguration,
+  insecure communication, code quality, known vulnerabilities, and logging.
+  Applicable to .NET, Java, Electron, and native C/C++ applications on Windows.
+
+nodes:
+  # -------------------------------------------------------------------------
+  # Recon & Setup
+  # -------------------------------------------------------------------------
+  - id: recon
+    type: info
+    title: "Recon & Setup"
+    content: "Gather initial information and prepare the testing environment before diving into specific vulnerability classes."
+    children:
+      - id: recon_asset_info
+        type: checklist
+        title: "Collect application information"
+        content: |
+          Before testing, understand what you're looking at:
+          - Application name, version, vendor, release date
+          - Intended user base (internal tool, consumer, enterprise)
+          - Platform and OS version requirements
+          - Does it communicate with a backend server or API?
+          - Does it interact with a local database?
+          - Does it run as a service / scheduled task?
+          - Is the application installed per-user or system-wide?
+          - Note the install directory and data directories
+
+      - id: recon_tool_setup
+        type: checklist
+        title: "Set up testing tools"
+        content: |
+          Recommended toolkit for thick client assessments:
+
+          Traffic interception:
+          - Burp Suite — HTTP/HTTPS proxy
+          - Wireshark — raw packet capture
+          - Echo Mirage / Proxifier — redirect non-HTTP TCP to Burp
+          - mitmproxy — scriptable proxy alternative
+
+          Process & system monitoring:
+          - Process Monitor (procmon) — file, registry, network, process events
+          - Process Hacker / Process Explorer — memory, handles, DLLs
+          - API Monitor — Windows API call tracing
+          - Autoruns — persistence locations
+          - AccessChk (Sysinternals) — permission auditing
+          - Regshot — before/after registry diff
+
+          Static analysis:
+          - dnSpy / ILSpy / dotPeek — .NET decompilation
+          - jadx / jd-gui — Java decompilation
+          - Ghidra / IDA Free / Binary Ninja — native binary analysis
+          - FLOSS / strings — string extraction from binaries
+          - CFF Explorer / PE-bear — PE header analysis
+          - Detect-It-Easy (DiE) — packer/compiler identification
+
+          Dynamic analysis / instrumentation:
+          - x64dbg / WinDbg — debugger
+          - Frida — dynamic instrumentation (hooks, patching at runtime)
+          - Cheat Engine — memory scanning
+
+      - id: q_app_tech
+        type: question
+        title: "What is the application's primary technology stack?"
+        options:
+          - label: ".NET (WinForms / WPF / MAUI / WinUI)"
+            key: "dotnet"
+            children:
+              - id: static_dotnet
+                type: checklist
+                title: ".NET static analysis"
+                content: |
+                  .NET assemblies are easily decompiled — treat them as near-source.
+                  - Decompile with dnSpy or ILSpy: load the main .exe and all .dll files
+                  - Enable symbol loading in dnSpy if PDB files are present
+                  - Search for hardcoded strings: Edit → Find → search for
+                    "password", "secret", "apikey", "token", "connectionstring"
+                  - Review app.config / web.config / appsettings.json for credentials
+                  - Check if assemblies are obfuscated (de4dot can deobfuscate many protectors)
+                  - Identify database access layer: EF Core, Dapper, raw ADO.NET?
+                  - Note all external DLL dependencies and their versions
+
+          - label: "Java (Swing / JavaFX / SWT)"
+            key: "java"
+            children:
+              - id: static_java
+                type: checklist
+                title: "Java static analysis"
+                content: |
+                  - Decompile .jar / .class files with jadx or jd-gui
+                  - Check META-INF/MANIFEST.MF for main class and classpath
+                  - Search for hardcoded credentials and API keys in source
+                  - Review properties files (*.properties, *.yml, *.xml) for secrets
+                  - Check for use of Runtime.exec() or ProcessBuilder (command injection risk)
+                  - Identify database driver and connection string source
+                  - Check ProGuard / DexGuard obfuscation level
+
+          - label: "Electron (Node.js + Chromium)"
+            key: "electron"
+            children:
+              - id: static_electron
+                type: checklist
+                title: "Electron static analysis"
+                content: |
+                  Electron apps often ship the full source inside an asar archive.
+                  - Extract app.asar: npx asar extract app.asar ./extracted
+                  - Review package.json for Electron version and all npm dependencies
+                  - Check main process file (main.js / index.js) for nodeIntegration,
+                    contextIsolation, sandbox settings
+                  - Search for dangerous IPC patterns: ipcMain.on() / ipcRenderer.invoke()
+                  - Look for webContents.executeJavaScript() or loadURL() with user input
+                  - Check preload scripts for exposed Node.js APIs
+                  - Note Electron version — many older versions have known CVEs
+
+          - label: "Native (C / C++ / Delphi / VB6)"
+            key: "native"
+            children:
+              - id: static_native
+                type: checklist
+                title: "Native binary static analysis"
+                content: |
+                  - Identify compiler/packer with Detect-It-Easy (DiE)
+                  - Extract strings with FLOSS (reveals obfuscated strings too):
+                    floss.exe target.exe > strings.txt
+                  - Load in Ghidra or IDA: auto-analyze, review main(), WinMain()
+                  - Look for dangerous functions: strcpy, sprintf, system, WinExec,
+                    ShellExecute, CreateProcess with user-controlled input
+                  - Check PE header with CFF Explorer: ASLR, DEP, SafeSEH, CFG flags
+                  - Review import table for interesting APIs:
+                    CryptDecrypt, RegOpenKey, CreateFile, InternetOpen, etc.
+                  - Search for embedded credentials in binary strings
+
+          - label: "Other / Unknown"
+            key: "other"
+            children:
+              - id: static_other
+                type: checklist
+                title: "Unknown tech — identification and static review"
+                content: |
+                  - Use Detect-It-Easy (DiE) to identify runtime/compiler
+                  - Check file extensions and directory structure for clues
+                  - Run strings / FLOSS on all .exe and .dll files
+                  - Monitor with Process Monitor during startup to see what files
+                    and registry keys are accessed
+                  - Look for config files, XML, JSON, INI in install directory
+
+  # -------------------------------------------------------------------------
+  # DA1 — Injections
+  # -------------------------------------------------------------------------
+  - id: da1
+    type: info
+    title: "DA1 — Injections"
+    content: |
+      SQL, LDAP, XML/XXE, OS command, and path traversal injection occur when
+      untrusted data is passed to an interpreter without proper sanitisation.
+      Thick clients often query local databases or backend APIs with user-supplied input.
+    children:
+      - id: da1_db_recon
+        type: checklist
+        title: "Identify all data inputs and database interactions"
+        content: |
+          Map attack surface before fuzzing:
+          - Run Process Monitor with filter on Process Name = target.exe,
+            Operation = TCP Send/Receive — note all outbound DB connections
+          - If local SQLite/Access DB: locate the file, open with DB Browser for SQLite
+          - Search decompiled code for SQL string concatenation patterns:
+            "SELECT * FROM " + userInput  (very dangerous, not parameterised)
+          - Note all UI fields that could feed into queries:
+            search boxes, login forms, filter dropdowns, IDs in URL-like params
+          - Check for LDAP usage: DirectorySearcher, ldap:// connections
+
+      - id: da1_sqli
+        type: checklist
+        title: "Test for SQL injection"
+        content: |
+          Probe every input that may be passed to a SQL query:
+          - Classic detection payload: ' OR '1'='1
+          - Error-based: ' (single quote) — does the app throw a DB error?
+          - Boolean-based: ' AND 1=1-- vs ' AND 1=2--  (different responses?)
+          - Time-based (blind): '; WAITFOR DELAY '0:0:5'-- (MSSQL)
+                                 '; SELECT SLEEP(5)-- (MySQL)
+          - Use sqlmap against any network-accessible DB endpoint:
+            sqlmap -u "http://backend/api?id=1" --dbms=mssql --level=3
+          - For local DB (SQLite), manually craft queries and observe behavior
+          - Check stored procedures for dynamic SQL construction
+
+      - id: da1_cmd_injection
+        type: checklist
+        title: "Test for OS command injection"
+        content: |
+          Look for app features that invoke system commands or shell:
+          - File path/name fields passed to CreateProcess, WinExec, ShellExecute,
+            Runtime.exec(), os.system(), child_process.exec()
+          - Test payloads (Windows): & whoami, | whoami, && whoami
+          - Test payloads (Unix-like): ; whoami, `whoami`, $(whoami)
+          - Monitor with API Monitor for CreateProcess / CreateProcessW calls
+            while interacting with suspicious features
+          - Search decompiled code for: system(), exec(), popen(), ShellExecute(),
+            Process.Start() with user-controlled arguments
+
+      - id: da1_xml_xxe
+        type: checklist
+        title: "Test for XML / XXE injection"
+        content: |
+          If the app parses XML (config, data files, API responses):
+          - Identify XML parsing: look for XmlDocument, XElement, SAXParser,
+            XMLReader, DOMParser, libxml2 in imports/decompiled code
+          - Test XXE payload in any XML input field or file upload:
+            <?xml version="1.0"?>
+            <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///C:/Windows/win.ini">]>
+            <root>&xxe;</root>
+          - If the parser resolves entities, the file content will appear in output
+          - Test blind XXE with out-of-band callback to Burp Collaborator
+          - Check if external entity resolution is disabled in parser configuration
+
+      - id: da1_path_traversal
+        type: checklist
+        title: "Test for path traversal"
+        content: |
+          Any feature that reads/writes files based on user input is a candidate:
+          - File open dialogs where the filename is also used server-side
+          - Document/attachment features, report generation, log viewing
+          - Test payloads: ../../../windows/win.ini
+                           ..\..\..\windows\win.ini
+                           ....//....//....//windows/win.ini (double-encoding)
+          - Monitor file system access with Process Monitor during testing
+          - Check for unsafe path joins: Path.Combine(baseDir, userInput) where
+            userInput starts with a root (e.g., C:\) overrides baseDir
+
+      - id: da1_ldap
+        type: checklist
+        title: "Test for LDAP injection"
+        content: |
+          Applicable if the app authenticates against or queries Active Directory/LDAP:
+          - Test authentication bypass: username = *)(&  password = anything
+          - Test search injection: )(cn=*  in search fields
+          - Look for DirectorySearcher.Filter built by string concatenation
+          - Verify input is escaped with: LdapEncoder.FilterEncode() or equivalent
+
+  # -------------------------------------------------------------------------
+  # DA2 — Broken Authentication & Session Management
+  # -------------------------------------------------------------------------
+  - id: da2
+    type: info
+    title: "DA2 — Broken Authentication & Session Management"
+    content: |
+      Covers insecure credential storage, authentication bypass, weak session
+      handling, and missing protections like account lockout or MFA enforcement.
+    children:
+      - id: da2_credential_storage
+        type: checklist
+        title: "Locate and inspect stored credentials"
+        content: |
+          Check every persistence location for plaintext credentials:
+          - Registry: search with Regshot diff after logging in, or manually browse
+            HKCU\Software\[AppName] and HKLM\Software\[AppName]
+          - File system: check install dir, %APPDATA%, %LOCALAPPDATA%, %TEMP%
+            for config files, INI files, JSON, XML containing passwords or tokens
+          - Windows Credential Manager: cmdkey /list
+          - SQLite / local database files: open with DB Browser and inspect tables
+          - Environment variables: check startup scripts and service definitions
+          - Memory: use Process Hacker → target process → Strings tab →
+            search for "password", "token" while logged in
+
+      - id: da2_auth_bypass
+        type: checklist
+        title: "Test for authentication bypass"
+        content: |
+          Client-side authentication checks can be circumvented:
+          - In decompiled code, look for boolean flags like isAuthenticated,
+            isAdmin, isLicensed — can these be patched in memory or at rest?
+          - Use dnSpy to set breakpoints on authentication functions;
+            modify return values to force success
+          - With Frida, hook the authentication method and return true:
+            Interceptor.attach(Module.getExportByName(null, "CheckLogin"), {
+              onLeave: function(retval) { retval.replace(1); }
+            });
+          - Look for license / activation checks that gate functionality —
+            test if they're enforced server-side or only client-side
+          - Check if direct URLs or API calls work without prior authentication
+
+      - id: da2_default_creds
+        type: checklist
+        title: "Test default and hardcoded credentials"
+        content: |
+          - Search decompiled code / strings for plaintext passwords
+          - Common patterns in code: "admin","password","changeme","sa",""
+          - Check config files shipped with the installer for default credentials
+          - Search vendor documentation and GitHub for default credentials
+          - Try common defaults: admin/admin, admin/password, sa/(blank), guest/guest
+          - Check if there is a backdoor or service account credential hardcoded
+            for support access
+
+      - id: da2_session
+        type: checklist
+        title: "Analyse session token handling"
+        content: |
+          - Intercept authentication traffic with Burp; capture the session token
+          - Is the token long (>= 128 bits) and random? Or sequential/predictable?
+          - Test token reuse after logout: does the old token still work?
+          - Test token reuse across users: does User A's token grant User B's data?
+          - Where is the token stored on disk between sessions?
+            (registry, file, Windows Credential Manager)
+          - Does the token expire? What is the lifetime?
+          - Is the token invalidated server-side on logout?
+
+      - id: q_da2_mfa
+        type: question
+        title: "Does the application support or require multi-factor authentication?"
+        options:
+          - label: "Yes"
+            key: "yes"
+            children:
+              - id: da2_mfa_bypass
+                type: checklist
+                title: "Test MFA bypass and enforcement"
+                content: |
+                  - Is MFA enforced server-side, or can it be bypassed client-side?
+                  - After completing the first factor, try direct API calls that skip
+                    the MFA step entirely
+                  - Test for response manipulation: intercept the MFA validation
+                    request and change a failure response to success
+                  - Check if MFA codes are predictable (TOTP: time-based — not
+                    predictable; HOTP: counter-based — test if counter resets)
+                  - Test if backup codes are single-use and properly invalidated
+          - label: "No / Not applicable"
+            key: "no"
+            children: []
+
+      - id: da2_lockout
+        type: checklist
+        title: "Test account lockout and brute-force protection"
+        content: |
+          - Attempt 10-20 failed logins — is the account locked or rate-limited?
+          - Test if lockout is enforced server-side (network) or only client-side
+          - Try attacking the API endpoint directly, bypassing the UI
+          - Check for CAPTCHA or delays after N failed attempts
+          - Test lockout bypass: does locking affect IP, username, or device?
+          - Verify that lockout events are logged (link to DA10)
+
+  # -------------------------------------------------------------------------
+  # DA3 — Sensitive Data Exposure
+  # -------------------------------------------------------------------------
+  - id: da3
+    type: info
+    title: "DA3 — Sensitive Data Exposure"
+    content: |
+      Sensitive data (PII, credentials, session tokens, keys) can leak via
+      process memory, temp files, logs, the registry, crash dumps, or the clipboard.
+    children:
+      - id: da3_memory
+        type: checklist
+        title: "Inspect process memory for sensitive data"
+        content: |
+          - Open Process Hacker → right-click target process → Properties → Memory
+          - Search memory strings for: "password", "token", "Bearer", "secret",
+            credit card numbers, SSNs, or any domain-specific sensitive values
+          - Use Process Hacker → Strings to dump all readable strings from heap/stack
+          - With WinDbg or x64dbg attached, break and search heap:
+            .foreach /ps 1 (addr {!heap -srch PASSWORD}) { db addr }
+          - Verify that passwords are zeroed in memory after use (SecureString / RtlSecureZeroMemory)
+          - Take a process dump with ProcDump:
+            procdump.exe -ma <pid> dump.dmp
+            Then open in WinDbg and search: s -u 0 L?0xFFFFFFFF "password"
+
+      - id: da3_filesystem
+        type: checklist
+        title: "Monitor file system for sensitive data writes"
+        content: |
+          Run Process Monitor (procmon) with filter: Process Name = target.exe,
+          Operation contains WriteFile — interact with the app and review writes.
+          Key locations to inspect:
+          - %TEMP% — temporary files; are they cleaned up? What do they contain?
+          - %APPDATA%\[AppName] — application data dir; check for plaintext configs
+          - %LOCALAPPDATA%\[AppName] — local cache; look for session files
+          - Install directory — check for log files written during normal use
+          - C:\Windows\Temp — if app runs as SYSTEM, it may write here
+
+          Also check:
+          - Are sensitive files world-readable? (icacls <file>)
+          - Are sensitive files deleted securely, or just unlinked (recoverable)?
+
+      - id: da3_registry
+        type: checklist
+        title: "Check registry for sensitive data"
+        content: |
+          - Use Regshot: take a snapshot before login, take another after login,
+            compare — note any new keys/values written
+          - Manually inspect: HKCU\Software\[AppName] and HKLM\Software\[AppName]
+          - Use reg query to search: reg query HKCU /s /f "password" /t REG_SZ
+          - Are credentials or tokens stored in plaintext REG_SZ values?
+          - Check who has read access to registry keys with sensitive data:
+            accesschk.exe -q HKCU\Software\[AppName]
+
+      - id: da3_clipboard
+        type: checklist
+        title: "Test clipboard exposure"
+        content: |
+          - Copy passwords, tokens, or PII from the application and check if they
+            remain accessible in the clipboard after navigating away
+          - Does the app clear clipboard content after a timeout or on window close?
+          - Does the app accept paste of sensitive values from clipboard without
+            masking (e.g., paste into a visible text field that should be masked)?
+          - Monitor clipboard changes with a simple PowerShell snippet during testing:
+            while($true){ Get-Clipboard; Start-Sleep 1 }
+
+      - id: da3_logs_debug
+        type: checklist
+        title: "Review log files and debug output"
+        content: |
+          - Locate all log files written by the application (use procmon)
+          - Review log contents for: passwords, tokens, session IDs, PII, stack traces
+          - Check Windows Event Log (eventvwr) for application-specific events
+          - Check if debug logging is enabled in production config
+          - Look for console output: run the app from cmd.exe — any stdout/stderr?
+          - Search app directory for .log, .txt, .bak, .old files
+          - Check crash dump settings: are dumps written on crash? Where?
+
+      - id: da3_crash_dumps
+        type: checklist
+        title: "Check crash dump configuration"
+        content: |
+          - Verify WER (Windows Error Reporting) settings:
+            HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
+          - Are full memory dumps enabled? These will contain all sensitive data in RAM
+          - Where are dumps stored? Is that location properly access-controlled?
+          - Does the app configure its own dump handler (SetUnhandledExceptionFilter)?
+
+  # -------------------------------------------------------------------------
+  # DA4 — Improper Cryptography Usage
+  # -------------------------------------------------------------------------
+  - id: da4
+    type: info
+    title: "DA4 — Improper Cryptography Usage"
+    content: |
+      Weak or misused cryptography compromises data confidentiality and integrity.
+      Common issues: weak algorithms, hardcoded keys/IVs, custom crypto, ECB mode,
+      broken PRNG, or insecure key storage.
+    children:
+      - id: da4_algorithm_id
+        type: checklist
+        title: "Identify cryptographic algorithms in use"
+        content: |
+          In decompiled code or strings, look for:
+          - Weak symmetric algorithms: DES, 3DES, RC2, RC4, Blowfish, XOR cipher
+          - Weak hash algorithms: MD5, SHA1 (for security-sensitive uses)
+          - ECB mode usage: AesManaged with CipherMode.ECB, "AES/ECB/PKCS5Padding"
+          - Custom / home-grown encryption routines (red flag)
+          - Strong acceptable algorithms: AES-256-GCM, AES-256-CBC + HMAC,
+            ChaCha20-Poly1305, RSA-2048+ with OAEP, ECDSA/ECDH P-256+
+          - Use CyberChef to identify encoded/encrypted data blobs in config files
+
+      - id: da4_key_management
+        type: checklist
+        title: "Assess encryption key storage and management"
+        content: |
+          - Are encryption keys hardcoded in the binary or config file?
+          - Search strings for Base64 blobs (potential embedded keys):
+            grep for strings matching [A-Za-z0-9+/]{32,}={0,2}
+          - Are keys derived from weak/predictable values (username, hostname)?
+          - On Windows: are keys stored in DPAPI (preferred) or plaintext?
+            Look for CryptProtectData / ProtectedData.Protect usage
+          - Are keys stored in Windows Certificate Store or HSM?
+          - Is the same key used for both encryption and authentication (MAC)?
+          - Is the IV/nonce hardcoded, reused, or properly random?
+
+      - id: da4_custom_crypto
+        type: checklist
+        title: "Identify and evaluate custom cryptographic implementations"
+        content: |
+          Custom crypto is almost always insecure. Signs of custom crypto:
+          - XOR operations applied to sensitive data
+          - Bit-shifting, rotation operations used as "encryption"
+          - Obfuscation disguised as encryption
+          - Base64 encoding of plaintext data treated as "encryption"
+          Steps:
+          - Locate the suspected crypto routine in decompiled code
+          - Document the algorithm fully
+          - Attempt to reverse the operation to recover plaintext/key
+          - Test with known plaintext: encrypt a known value and verify output is predictable
+
+      - id: da4_cert_validation
+        type: checklist
+        title: "Test TLS certificate validation"
+        content: |
+          See also DA7 — this focuses specifically on crypto-level validation:
+          - Set up Burp with a self-signed cert; does the app accept it?
+          - Check decompiled code for: ServicePointManager.ServerCertificateValidationCallback
+            returning true, TrustAllCerts, X509TrustManager with empty checkServerTrusted()
+          - Test with an expired certificate
+          - Test with a certificate for a different hostname
+          - Verify certificate pinning: does the app reject valid-but-unexpected certs?
+
+  # -------------------------------------------------------------------------
+  # DA5 — Improper Authorization
+  # -------------------------------------------------------------------------
+  - id: da5
+    type: info
+    title: "DA5 — Improper Authorization"
+    content: |
+      Authorization flaws allow users to access resources, features, or data
+      beyond their privilege level. On desktop apps this includes filesystem and
+      registry permissions, service permissions, and client-side role enforcement.
+    children:
+      - id: da5_process_privileges
+        type: checklist
+        title: "Audit application process privileges"
+        content: |
+          - Open Process Hacker → target process → Properties → Token
+          - Is the process running as SYSTEM, Administrator, or a least-privilege account?
+          - Does the app require elevation (UAC prompt) to run? Is it necessary?
+          - Use accesschk to review token privileges:
+            accesschk.exe -p <pid>
+          - Check if the app has SeImpersonatePrivilege, SeDebugPrivilege, or
+            SeAssignPrimaryTokenPrivilege (potential for privilege escalation)
+          - Is there a service component? Check its logon account:
+            sc qc [ServiceName]
+
+      - id: da5_file_permissions
+        type: checklist
+        title: "Audit file and directory permissions"
+        content: |
+          - Check install directory permissions (should not be writable by non-admins):
+            icacls "C:\Program Files\[AppName]"
+          - Look for world-writable directories in the install path:
+            accesschk.exe -w -d "C:\Program Files\[AppName]"
+          - Check permissions on DLL files (writable DLL → DLL hijacking, see DA8)
+          - Check data directories (%APPDATA%) — are files world-readable?
+          - Config files containing credentials: are they readable by other local users?
+
+      - id: da5_registry_permissions
+        type: checklist
+        title: "Audit registry key permissions"
+        content: |
+          - Check key permissions with accesschk:
+            accesschk.exe -k HKLM\Software\[AppName]
+          - Can a non-admin user write to HKLM\Software\[AppName]?
+            (could enable credential/config tampering)
+          - Can a non-admin user write to the service registry key?
+            accesschk.exe -k HKLM\System\CurrentControlSet\Services\[ServiceName]
+
+      - id: da5_service_permissions
+        type: checklist
+        title: "Audit Windows service configuration"
+        content: |
+          - List services used by the app: sc query type= all | findstr [AppName]
+          - Check service binary path for unquoted spaces:
+            sc qc [ServiceName] — look at BINARY_PATH_NAME
+            If path contains spaces and is unquoted: potential privilege escalation
+          - Check service permissions (can unprivileged user modify or restart?):
+            accesschk.exe -c [ServiceName] -v
+          - Is the service running as LocalSystem? Consider whether LocalService
+            or a dedicated service account would suffice
+
+      - id: q_da5_roles
+        type: question
+        title: "Does the application have multiple user roles (e.g., admin vs. standard user)?"
+        options:
+          - label: "Yes"
+            key: "yes"
+            children:
+              - id: da5_role_enforcement
+                type: checklist
+                title: "Test role-based access control enforcement"
+                content: |
+                  Client-side role checks are easily bypassed:
+                  - Log in as a low-privilege user; identify UI elements hidden/disabled
+                    for that role (admin buttons, export features, config panels)
+                  - In decompiled code, find where role checks occur:
+                    if (currentUser.IsAdmin) { ... }
+                  - Use a debugger or Frida to patch the role check to return true
+                  - Replay API/backend requests that were made by an admin user
+                    using the low-privilege user's session token — does the server enforce?
+                  - Test IDOR: change object IDs in requests to access other users' data
+          - label: "No / Single role"
+            key: "no"
+            children: []
+
+  # -------------------------------------------------------------------------
+  # DA6 — Security Misconfiguration
+  # -------------------------------------------------------------------------
+  - id: da6
+    type: info
+    title: "DA6 — Security Misconfiguration"
+    content: |
+      Misconfigured group policies, registry settings, services, firewall rules,
+      and file parsers create exploitable attack surface even without code flaws.
+    children:
+      - id: da6_debug_mode
+        type: checklist
+        title: "Check for debug/development mode in production build"
+        content: |
+          - Look for debug flags in config: debug=true, loglevel=DEBUG, verbose=1
+          - Check if .pdb symbol files are bundled with the release (info leak)
+          - Look for test/debug endpoints or hidden UI panels (Ctrl+D, /debug, etc.)
+          - In .NET assemblies: check if [assembly: DebuggingModes.Default] or
+            IsJITTrackingEnabled is set
+          - Electron: check if devTools can be opened (Ctrl+Shift+I) in production
+          - Check if the installer leaves any test accounts or backdoor users
+
+      - id: da6_error_handling
+        type: checklist
+        title: "Test error handling and information disclosure"
+        content: |
+          - Trigger errors deliberately: invalid input, missing files, network disconnect
+          - Do error dialogs reveal: stack traces, file paths, internal IP addresses,
+            database schema details, version info of internal components?
+          - Are SQL error messages surfaced to the user?
+          - Does the app log verbose errors to a world-readable file?
+          - Check crash behavior: does it expose a JIT debugging prompt with source?
+
+      - id: da6_file_type_validation
+        type: checklist
+        title: "Test file type and content validation"
+        content: |
+          Apps that process files (documents, images, configs):
+          - Upload a file with the wrong extension (rename evil.exe to report.pdf)
+          - Test with a polyglot file (valid image + embedded payload)
+          - Check if validation is extension-based only (easy to bypass) vs. magic-bytes-based
+          - Test with malformed/oversized files for parser crashes
+          - Does the app execute or shell-out on any processed file type?
+          - Test ZIP/archive processing for ZIP slip (path traversal):
+            craft a .zip where a file entry has a ../../ path
+
+      - id: q_da6_autoupdate
+        type: question
+        title: "Does the application have an auto-update mechanism?"
+        options:
+          - label: "Yes"
+            key: "yes"
+            children:
+              - id: da6_autoupdate
+                type: checklist
+                title: "Test auto-update security"
+                content: |
+                  Compromised update channels are a severe supply-chain risk:
+                  - Does the update happen over HTTPS? (test with Burp — intercept update check)
+                  - Is the update package integrity verified (signature / hash)?
+                  - Where is the signature checked — client-side or server-side?
+                  - Try a MitM attack: intercept update request, replace with a crafted package
+                  - Is the update URL in a config file that a user could modify?
+                  - Does the updater run with elevated privileges?
+                    If yes, delivering a malicious update = full SYSTEM compromise
+                  - Check update binary/installer permissions (writable by non-admin?)
+          - label: "No"
+            key: "no"
+            children: []
+
+      - id: da6_install_permissions
+        type: checklist
+        title: "Review installer and installation directory security"
+        content: |
+          - Run the installer with Process Monitor — note all files and registry keys created
+          - Check install directory ACL immediately after install:
+            icacls "C:\Program Files\[AppName]" /T
+          - Verify no world-writable directories under Program Files
+          - Check if installer drops files to %TEMP% and executes them (temp file hijacking)
+          - Review uninstall behavior: are sensitive data files and registry keys cleaned up?
+
+  # -------------------------------------------------------------------------
+  # DA7 — Insecure Communication
+  # -------------------------------------------------------------------------
+  - id: da7
+    type: info
+    title: "DA7 — Insecure Communication"
+    content: |
+      Plaintext or weakly encrypted communication allows MitM attacks. Covers
+      HTTP, weak TLS, plaintext DB connections, and proprietary protocol analysis.
+    children:
+      - id: da7_proxy_setup
+        type: checklist
+        title: "Intercept application traffic"
+        content: |
+          For HTTP/HTTPS traffic:
+          - Set system proxy to Burp (127.0.0.1:8080)
+          - Install Burp CA certificate in Windows trusted root store
+          - Most .NET / Java apps honour the system proxy automatically
+          - If not: use Proxifier to force all process traffic through Burp
+
+          For non-HTTP traffic (custom TCP protocols, binary protocols):
+          - Use Wireshark to capture all traffic from the test machine
+          - Use Echo Mirage to intercept and modify raw TCP streams in real time
+          - Use Frida to hook send()/recv() / Socket.Send() to log/modify data
+          - Use ncat / netcat as a transparent TCP proxy for simple protocols
+
+      - id: da7_cleartext
+        type: checklist
+        title: "Detect plaintext communication"
+        content: |
+          - Run Wireshark during normal app usage; filter: not ssl and tcp
+          - Look for HTTP, FTP, SMTP, Telnet, custom binary protocols without TLS
+          - Check for database connections in clear: MySQL port 3306, MSSQL 1433,
+            PostgreSQL 5432 — verify TLS is negotiated (force_ssl=true?)
+          - Look for LDAP (389) instead of LDAPS (636)
+          - Check for plaintext credentials in captured traffic
+
+      - id: da7_tls_quality
+        type: checklist
+        title: "Analyse TLS configuration"
+        content: |
+          - In Burp: Proxy → Options → TLS Negotiation → note negotiated version and cipher
+          - Check for: SSLv3, TLS 1.0, TLS 1.1 (deprecated; should use TLS 1.2 minimum)
+          - Check cipher suites: reject NULL, EXPORT, RC4, DES, 3DES, anonymous DH
+          - Use testssl.sh or SSLyze if there is a network-accessible TLS endpoint:
+            testssl.sh target:443
+            sslyze --regular target:443
+          - Verify Forward Secrecy: look for ECDHE or DHE key exchange
+          - Test for BEAST, POODLE, DROWN, LUCKY13 if legacy ciphers found
+
+      - id: da7_cert_validation
+        type: checklist
+        title: "Test TLS certificate validation (MitM)"
+        content: |
+          - With Burp intercepting, does the app accept Burp's self-signed cert?
+            If yes: certificate validation is broken/disabled
+          - Test with an expired cert (can configure in Burp or use a custom cert)
+          - Test with a cert for the wrong hostname
+          - Look for in-code bypasses: ServicePointManager.ServerCertificateValidationCallback,
+            NoopHostnameVerifier, TrustAllCerts, InsecureTrustManagerFactory
+          - Test for certificate pinning:
+            If the app rejects Burp even with a trusted CA → pinning is active
+            Try Frida SSL-Kill-Switch or certificate pinning bypass scripts
+
+      - id: q_da7_custom_protocol
+        type: question
+        title: "Does the application use a non-HTTP custom or binary protocol?"
+        options:
+          - label: "Yes"
+            key: "yes"
+            children:
+              - id: da7_custom_protocol
+                type: checklist
+                title: "Analyse and fuzz the custom protocol"
+                content: |
+                  - Capture raw traffic with Wireshark; identify packet structure
+                  - Look for magic bytes, length fields, message type fields, checksums
+                  - Use Echo Mirage or Frida hooks to intercept and modify messages
+                  - Map message types to application actions (login, data fetch, command)
+                  - Test for injection: modify string fields with SQL/command payloads
+                  - Test for length/bounds issues: send messages with wrong length fields
+                  - Test for authentication bypass: replay auth tokens, skip auth messages
+                  - Is the protocol encrypted? If yes, see DA4 for crypto analysis
+          - label: "No / HTTP only"
+            key: "no"
+            children: []
+
+  # -------------------------------------------------------------------------
+  # DA8 — Poor Code Quality
+  # -------------------------------------------------------------------------
+  - id: da8
+    type: info
+    title: "DA8 — Poor Code Quality"
+    content: |
+      Missing code signing, lack of binary protections (ASLR, DEP, CFG), DLL
+      hijacking opportunities, race conditions, and weak reverse-engineering
+      resistance all fall under this category.
+    children:
+      - id: da8_code_signing
+        type: checklist
+        title: "Verify code signing"
+        content: |
+          - Right-click the .exe in Explorer → Properties → Digital Signatures
+          - Verify with PowerShell:
+            Get-AuthenticodeSignature ".\target.exe"
+          - Is the signature present? Is it valid? Has it expired?
+          - Is the signing certificate from a trusted root CA?
+          - Check all loaded DLLs for signatures — third-party DLLs may be unsigned
+          - Does the application verify the integrity of its own files at startup?
+
+      - id: da8_binary_protections
+        type: checklist
+        title: "Check binary exploit mitigations"
+        content: |
+          Use CFF Explorer or winchecksec to enumerate PE security flags:
+          - ASLR (DynamicBase): executable and all DLLs should have this set
+          - DEP/NX (NXCompat): must be enabled to prevent shellcode execution on stack
+          - SafeSEH: for 32-bit binaries, verifies exception handler chain
+          - CFG (ControlFlowGuard): limits valid indirect call targets
+          - High Entropy VA (HIGHENTROPYVA): wider ASLR for 64-bit
+          - Authenticode: signed binary (see da8_code_signing above)
+          Command: winchecksec.exe target.exe
+          Missing ASLR or DEP is a significant risk if memory corruption bugs exist.
+
+      - id: da8_dll_hijacking
+        type: checklist
+        title: "Test for DLL hijacking / preloading"
+        content: |
+          Windows searches for DLLs in a defined order; a writable directory earlier
+          in the search path allows a malicious DLL to be loaded:
+          - Run Process Monitor with filter: Result = NAME NOT FOUND, Path ends with .dll
+            while the application starts — these are missing DLL candidates
+          - Check if any missing DLL is searched in a user-writable location
+            (app directory, %TEMP%, current working directory)
+          - Also check DLLs that ARE found — are their locations writable?
+            icacls "C:\Program Files\[AppName]\*.dll"
+          - Place a test DLL (e.g., a messagebox-popping proof-of-concept) in the
+            writable location and restart the application to confirm hijacking
+          - Check the application manifest for DLL redirection or activation context
+
+      - id: da8_race_conditions
+        type: checklist
+        title: "Test for race conditions (TOCTOU)"
+        content: |
+          Time-of-check to time-of-use (TOCTOU) flaws occur when a security check
+          and the subsequent action are not atomic:
+          - Look for patterns like: check if file exists → use the file
+            (can swap the file between check and use)
+          - Common targets: temp file creation, file-based locking mechanisms,
+            privileged file operations in services
+          - Use Process Monitor to identify temp file patterns
+          - Test by rapidly creating/modifying files during elevated operations
+          - Check named pipe / mutex creation for race conditions that allow
+            privilege escalation
+
+      - id: q_da8_electron
+        type: question
+        title: "Is this an Electron application?"
+        options:
+          - label: "Yes"
+            key: "yes"
+            children:
+              - id: da8_electron_security
+                type: checklist
+                title: "Electron-specific code quality checks"
+                content: |
+                  - Check Electron version: outdated versions have known CVEs (check NVD)
+                  - In main process config, verify:
+                    nodeIntegration: false  (prevent renderer from accessing Node.js)
+                    contextIsolation: true  (isolate renderer from Node env)
+                    sandbox: true           (OS-level sandboxing for renderer)
+                    webSecurity: true       (enforce same-origin policy)
+                  - Check preload scripts: do they expose unsafe APIs via contextBridge?
+                  - Look for webContents.openDevTools() (opens DevTools in prod — dangerous)
+                  - Test XSS in any WebContents that renders user-controlled content
+                    → with nodeIntegration:true this leads to RCE
+                  - Check IPC handlers (ipcMain.on/handle) for:
+                    - Shell command execution with user-controlled arguments
+                    - File system access without path validation
+                  - Look for shell.openExternal() with user-controlled input (URL handler injection)
+          - label: "No"
+            key: "no"
+            children: []
+
+  # -------------------------------------------------------------------------
+  # DA9 — Using Components with Known Vulnerabilities
+  # -------------------------------------------------------------------------
+  - id: da9
+    type: info
+    title: "DA9 — Using Components with Known Vulnerabilities"
+    content: |
+      Outdated runtimes, frameworks, or third-party libraries with publicly
+      disclosed CVEs are a ready-made attack surface that requires no novel research.
+    children:
+      - id: da9_runtime_versions
+        type: checklist
+        title: "Identify and assess runtime / framework versions"
+        content: |
+          - .NET: check assembly metadata with dnSpy or:
+            [System.Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+            Look for target framework in project manifest or app.config
+          - Java: look at MANIFEST.MF: "Created-By:" or "Build-Jdk:" entries
+            Also: check bundled JRE version in installer or app directory
+          - Electron: check package.json for "electron" version; cross-reference
+            against Electron security advisories at electronjs.org/releases/stable
+          - Native runtime DLLs: check file version of bundled DLLs (e.g., MSVCRT):
+            (Get-Item "msvcp140.dll").VersionInfo
+          - Check for bundled OpenSSL, libcurl, zlib, SQLite versions (strings output)
+          - Search all identified versions against NVD: nvd.nist.gov/vuln/search
+
+      - id: da9_third_party_libs
+        type: checklist
+        title: "Inventory third-party libraries and check for CVEs"
+        content: |
+          - .NET: examine all .dll files in install directory; open each in dnSpy
+            to read Assembly Name and Version from Properties
+          - Java: list all .jar files; check their manifests for version
+          - Node.js/Electron: read package.json (or package-lock.json):
+            npm audit --production   (within extracted asar)
+          - Native: strings on all bundled .dll files; look for version strings
+          - Cross-reference all found components against:
+            - NVD (nvd.nist.gov)
+            - Snyk Vulnerability DB (security.snyk.io)
+            - OSV (osv.dev)
+          - Prioritise: RCE and privilege-escalation CVEs in components the app
+            actively uses (parsers, image libs, network libs)
+
+      - id: da9_eol_components
+        type: checklist
+        title: "Identify end-of-life or abandoned components"
+        content: |
+          - Check .NET Framework version: anything < 4.8 is no longer receiving
+            security updates; .NET Core below 6 is EOL
+          - Java: verify if the bundled JRE is a current LTS release
+          - Check if any bundled library has had no releases in 3+ years
+            and has known open security issues
+          - Windows: verify minimum OS version requirement — is the app still
+            supported on end-of-life Windows versions (Win 7/8/8.1)?
+
+  # -------------------------------------------------------------------------
+  # DA10 — Insufficient Logging & Monitoring
+  # -------------------------------------------------------------------------
+  - id: da10
+    type: info
+    title: "DA10 — Insufficient Logging & Monitoring"
+    content: |
+      Without adequate logging, security incidents cannot be detected or investigated.
+      Desktop apps should log security-relevant events and protect those logs from tampering.
+    children:
+      - id: da10_audit_events
+        type: checklist
+        title: "Verify logging of security-relevant events"
+        content: |
+          Trigger each event and check if it appears in application logs or Windows Event Log:
+          - Successful login / logout
+          - Failed login attempt (incorrect password)
+          - Account lockout trigger
+          - Privilege escalation or role change
+          - Access to sensitive data (export, print, view PII)
+          - Configuration changes
+          - Failed authorisation attempt (accessing a restricted feature)
+          - Application errors and exceptions (sanitised, no stack traces to user)
+          Check locations: application log files, Windows Event Log (eventvwr → Applications)
+
+      - id: da10_log_content
+        type: checklist
+        title: "Review what is logged — avoid sensitive data in logs"
+        content: |
+          Good logging should NOT include:
+          - Plaintext passwords or tokens (even failed login attempts)
+          - Full PII (log user ID, not full SSN/credit card)
+          - Full request/response bodies containing sensitive data
+          - Encryption keys or session secrets
+
+          But SHOULD include:
+          - Timestamp (UTC)
+          - User ID / account identifier
+          - Source IP / hostname
+          - Action performed
+          - Success or failure outcome
+          - Relevant object ID (e.g., "accessed file ID 4521")
+
+      - id: da10_log_protection
+        type: checklist
+        title: "Test log integrity and access controls"
+        content: |
+          - Can a regular (non-admin) user read application log files?
+            icacls <log_path>
+          - Can a regular user modify or delete log files?
+          - Are logs sent to a centralised server (SIEM)? If not, local logs can
+            be wiped by an attacker with local access to cover tracks
+          - Is there a log rotation policy? Are old logs archived or permanently deleted?
+          - Does the app detect log file tampering (file integrity monitoring)?
+
+      - id: da10_monitoring
+        type: checklist
+        title: "Assess monitoring and alerting capability"
+        content: |
+          - Is there a mechanism to alert on repeated failed logins (brute force)?
+          - Are logs aggregated in a SIEM or log management platform?
+          - Is there alerting on anomalous usage patterns?
+          - If the app is enterprise/multi-user: is there a security dashboard
+            or audit report feature for administrators?
+          - Test: perform a clearly suspicious sequence of actions (e.g., 20 failed
+            logins, then access all user records) — does anyone get alerted?
