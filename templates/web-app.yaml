@@ -1,6 +1,7 @@
 name: "Web Application Testing"
 version: "1.1.0"
 author: "HackMind"
+tier: asset
 description: >
   Comprehensive web application penetration testing methodology.
   Covers OWASP Top 10 (2021), recon, authentication, authorization, injection,

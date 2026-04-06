@@ -16,7 +16,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS templates (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     version     TEXT NOT NULL,
+    tier        TEXT NOT NULL DEFAULT 'asset',
     source_file TEXT,
     data        TEXT NOT NULL,       -- full YAML/JSON source, stored as-is
     imported_at TEXT NOT NULL
@@ -103,6 +104,7 @@ CREATE TABLE IF NOT EXISTS project_scope_tags (
     PRIMARY KEY (project_id, tag),
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );"""),
+    (3, "ALTER TABLE templates ADD COLUMN tier TEXT NOT NULL DEFAULT 'asset';"),
 ]
 
 

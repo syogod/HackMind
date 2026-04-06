@@ -170,7 +170,10 @@ class MainWindow(QMainWindow):
 
         project = dialog.created_project
         project_repo.create_project(self._state.db, project)
-        tree_engine.instantiate_project(self._state.db, project.id, project.target_name)
+        tree_engine.instantiate_project(
+            self._state.db, project.id, project.target_name,
+            template_id=project.template_id or None,
+        )
 
         self._state.project = project
         self._load_project()

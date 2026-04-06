@@ -1,0 +1,380 @@
+name: "Red Team Operation"
+version: "1.0.0"
+author: "HackMind"
+tier: engagement
+description: >
+  Top-level engagement template for full red team operations.
+  Focuses on realistic threat simulation: OSINT, initial access, C2 establishment,
+  internal recon, lateral movement, and objective completion — while evading
+  detection. Less prescriptive than a pentest; adapt to the target environment.
+  Add discovered assets as child nodes with the appropriate asset template.
+
+nodes:
+  # ===========================================================================
+  # ENGAGEMENT SETUP
+  # ===========================================================================
+  - id: setup
+    type: info
+    title: "Engagement Setup"
+    content: "Rules of engagement, threat profile, and deconfliction before any activity."
+    children:
+      - id: setup_roe
+        type: checklist
+        title: "Rules of Engagement and authorisation"
+        content: |
+          - Signed authorisation document on file (covers all planned TTPs)
+          - Confirm testing window and any blackout periods
+          - Define target crown jewels / objectives agreed with client
+          - Confirm deconfliction process with Blue Team / SOC (if not blind)
+          - Confirm whether engagement is announced, semi-announced, or fully blind
+          - Emergency stop / abort procedure and contact documented
+          - Data handling rules for sensitive files / credentials captured
+
+      - id: setup_threat_profile
+        type: checklist
+        title: "Define threat actor profile"
+        content: |
+          Agree with client which threat actor archetype to emulate:
+          - Nation-state APT (long dwell, living-off-the-land, supply chain)
+          - Financially motivated ransomware group (speed, data exfil, encryption)
+          - Insider threat (already on network, legitimate credentials)
+          - Hacktivist (noisy, opportunistic, defacement / data leak focus)
+
+          Reference an applicable MITRE ATT&CK group for TTP selection.
+          Note: MITRE ATT&CK navigator URL for the chosen group
+
+      - id: setup_scope
+        type: checklist
+        title: "Record scope and constraints"
+        content: |
+          - In-scope domains and IP ranges
+          - Physical / badge cloning in scope?
+          - Social engineering / phishing in scope? (which personas / pretexts approved)
+          - C2 infrastructure restrictions (allowed egress ports, no-use of known-bad IPs)
+          - Any systems that must not be touched (production databases, OT/ICS)
+          - Approved payload types (shellcode, macros, ISO, HTML smuggling, etc.)
+
+  # ===========================================================================
+  # OSINT & TARGET PROFILING
+  # ===========================================================================
+  - id: osint
+    type: info
+    title: "OSINT & Target Profiling"
+    content: "Build a detailed intelligence picture before any active contact."
+    children:
+      - id: osint_org
+        type: checklist
+        title: "Organisation and infrastructure OSINT"
+        content: |
+          - ASN and IP range enumeration (see Bug Bounty template for full process)
+          - Passive subdomain enumeration: subfinder, amass, crt.sh
+          - Shodan / Censys: find externally exposed services
+          - Job postings: LinkedIn, Indeed — enumerate tech stack from job requirements
+          - Company website, press releases, acquisitions (new domains / subsidiaries)
+          - DNS records: MX (email provider), SPF/DMARC (phishing feasibility)
+            dig TXT <domain> | grep -i "v=spf\|dmarc"
+
+      - id: osint_employees
+        type: checklist
+        title: "Employee and personnel profiling"
+        content: |
+          - LinkedIn: enumerate employees, roles, seniority, technology mentions
+          - Hunter.io / Skrapp: email format and addresses
+          - HIBP / dehashed: check if corporate emails appear in breach data
+          - theHarvester -d <domain> -b all
+          - Twitter / X, GitHub: personal accounts that mention the company
+          - Build a target list for phishing or pretexting (prioritise: executives, IT, finance, HR)
+
+      - id: osint_code
+        type: checklist
+        title: "Code and secret exposure"
+        content: |
+          - GitHub org search: org:<target> (secrets, internal hostnames, credentials)
+          - trufflehog github --org=<target> --only-verified
+          - Pastebin / leaked data searches
+          - Exposed .git directories: httpx -l subdomains.txt -path /.git/HEAD -mc 200
+
+      - id: osint_physical
+        type: checklist
+        title: "Physical and facilities OSINT (if in scope)"
+        content: |
+          - Google Maps / Street View: entrances, badge readers, tailgating opportunities
+          - Job postings: physical security vendor (Lenel, Software House, etc.)
+          - LinkedIn: facilities / physical security staff names
+          - CCTV brand fingerprinting from public photos
+          - Visitor policy research (public website, Glassdoor reviews)
+
+  # ===========================================================================
+  # INITIAL ACCESS
+  # ===========================================================================
+  - id: initial_access
+    type: info
+    title: "Initial Access"
+    content: "Gain a foothold using the approved initial access vector(s)."
+    children:
+      - id: ia_phishing
+        type: checklist
+        title: "Phishing / spear-phishing (if in scope)"
+        content: |
+          Infrastructure:
+          - Register lookalike domain (typosquat or combo-squatting)
+          - Configure SPF, DKIM, DMARC on sending domain to improve deliverability
+          - Set up redirector (Apache mod_rewrite or Nginx) in front of C2
+          - Test email deliverability: mail-tester.com, MX Toolbox
+
+          Payload options (confirm approved types in ROE):
+          - HTML smuggling (smuggler, nomore.tech)
+          - ISO / IMG with LNK (bypasses Mark-of-the-Web on older Windows)
+          - Macro-enabled Office doc (decreasing effectiveness post-2022)
+          - PDF with embedded link to credential harvester
+          - QR code phishing (quishing) to bypass email gateway URL scanning
+
+          Pretexts: IT password reset, HR policy update, invoice, shared document notification
+
+      - id: ia_external_exploit
+        type: checklist
+        title: "Exploitation of external-facing services"
+        content: |
+          Review OSINT findings for exploitable externally exposed services:
+          - VPN / Citrix / RDP gateways: check for known CVEs (Fortinet, Pulse, Citrix bleed)
+          - Public-facing web apps: run through Web Application Testing checklist
+          - Exposed admin panels with default credentials
+          - Outdated software versions identified via Shodan/Censys
+          - Exchange / OWA: password spray (CAUTION: lockout policy)
+
+      - id: ia_physical
+        type: checklist
+        title: "Physical access (if in scope)"
+        content: |
+          - Tailgating / badge cloning (Proxmark3 / Flipper Zero)
+          - USB drop (document exact locations and devices — retrieve all at end)
+          - Rogue access point placement
+          - All physical access attempts must be within agreed scope and time window
+          - Photograph / note badge reader models for credential format identification
+
+      - id: ia_supply_chain
+        type: checklist
+        title: "Supply chain / third-party vector (if in scope)"
+        content: |
+          - Identify key suppliers / MSPs from OSINT (LinkedIn, job postings)
+          - Check if supplier portals / VPNs are accessible from internet
+          - Software supply chain: identify open-source dependencies (dependency confusion candidates)
+          - Note: requires explicit written authorisation for each third party targeted
+
+  # ===========================================================================
+  # C2 ESTABLISHMENT & EVASION
+  # ===========================================================================
+  - id: c2
+    type: info
+    title: "C2 Establishment & Evasion"
+    content: "Establish a stable, resilient C2 channel while avoiding detection."
+    children:
+      - id: c2_infrastructure
+        type: checklist
+        title: "C2 infrastructure setup"
+        content: |
+          - Categorise C2 domains (register aged domains or use domain fronting)
+          - Set up redirectors to obscure true C2 server IP
+          - Configure HTTPS C2 with valid certificate (Let's Encrypt)
+          - Use malleable C2 profiles that mimic legitimate traffic (CDN, SaaS, update traffic)
+          - Frameworks: Cobalt Strike, Havoc, Sliver, Brute Ratel — confirm which is approved
+          - Test C2 comms through target's egress (ports 80, 443, 8443 most likely)
+
+      - id: c2_payload_evasion
+        type: checklist
+        title: "Payload evasion"
+        content: |
+          - Test payload against Windows Defender + any known AV before deployment
+          - Techniques: AMSI bypass, ETW patching, sleep obfuscation, indirect syscalls
+          - Avoid well-known shellcode loaders — use custom or lesser-known ones
+          - Sign payloads with code signing cert if available
+          - Verify payload doesn't hit known-bad hashes (VirusTotal — use private scan or don't submit)
+
+      - id: c2_persistence
+        type: checklist
+        title: "Persistence and redundancy"
+        content: |
+          Establish at least two independent persistence mechanisms:
+          - Scheduled task (SYSTEM or user context)
+          - Registry Run key
+          - WMI subscription
+          - COM hijack
+          - Service installation (noisier)
+          Use different C2 profiles / beacons for each — if one is burned, retain access.
+
+  # ===========================================================================
+  # INTERNAL RECONNAISSANCE
+  # ===========================================================================
+  - id: internal_recon
+    type: info
+    title: "Internal Reconnaissance"
+    content: "Map the internal environment from the foothold — stay stealthy."
+    children:
+      - id: int_recon_situational
+        type: checklist
+        title: "Situational awareness on beachhead"
+        content: |
+          - whoami /all — privileges, group memberships
+          - systeminfo — OS version, patch level, hostname, domain
+          - ipconfig /all — interfaces, DNS servers, domain
+          - netstat -ano — active connections (detect EDR calling home)
+          - tasklist — running processes (identify AV/EDR product)
+          - net user, net localgroup administrators
+          - Check for virtualisation / sandbox artefacts before proceeding
+
+      - id: int_recon_network
+        type: checklist
+        title: "Internal network mapping (stealthy)"
+        content: |
+          Prefer living-off-the-land over noisy scanners:
+          - arp -a  (hosts on local segment)
+          - ping sweep via PowerShell (1..254 | % { Test-Connection -Count 1 -Quiet "10.10.0.$_" })
+          - net view /all /domain
+          - If stealth allows: crackmapexec smb <subnet> (generates SMB noise)
+          Avoid nmap unless explicitly accepted — triggers most EDR/NDR products
+
+      - id: int_recon_ad
+        type: checklist
+        title: "AD enumeration (living off the land)"
+        content: |
+          Built-in tools first to avoid dropping tooling:
+          - net user /domain, net group "Domain Admins" /domain
+          - nltest /dclist:<domain>
+          - [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+
+          If LDAP queries are acceptable:
+          - ldapsearch or PowerView (in-memory)
+          - BloodHound collection (noisy — time carefully, consider off-hours)
+
+  # ===========================================================================
+  # LATERAL MOVEMENT & PRIVILEGE ESCALATION
+  # ===========================================================================
+  - id: lateral_privesc
+    type: info
+    title: "Lateral Movement & Privilege Escalation"
+    content: "Move toward objectives using discovered trust relationships and misconfigurations."
+    children:
+      - id: lat_credential_abuse
+        type: checklist
+        title: "Credential harvesting and reuse"
+        content: |
+          - Dump LSASS (if EDR allows): Task Manager, procdump, nanodump, or direct syscall
+          - Credential files: %APPDATA%\Microsoft\Credentials, Sticky Notes, browser saved passwords
+          - Kerberoasting / AS-REP roasting (see Internal Pentest template for commands)
+          - Password spray with harvested username list (respect lockout policy)
+          - Credential reuse: test found passwords across all discovered services
+
+      - id: lat_movement
+        type: checklist
+        title: "Lateral movement techniques"
+        content: |
+          Prefer stealthy methods:
+          - WMI / WinRM over PsExec (less EDR telemetry on WMI)
+          - Pass-the-Hash / Pass-the-Ticket
+          - DCOM lateral movement (ShellWindows, ShellBrowserWindow, MMC20)
+          - RDP with /restrictedadmin if NTLMv2 hash available
+          Noisier (use only if stealth no longer required):
+          - PsExec / SMB service creation
+          - Scheduled task creation on remote host
+
+      - id: lat_da_paths
+        type: checklist
+        title: "Domain Admin escalation paths"
+        content: |
+          Work through BloodHound attack paths. Common quick wins:
+          - Unconstrained delegation host → coerce auth from DC (PrinterBug, PetitPotam)
+          - RBCD via GenericWrite on computer object
+          - DCSync via WriteDACL / GenericAll on domain object
+          - ADCS ESC1–ESC8 (Certipy: certipy find -u <user> -p <pass> -dc-ip <DC>)
+          - GPO abuse with write access
+          - Shadow Credentials (if PKINIT available)
+
+  # ===========================================================================
+  # OBJECTIVES & EXFILTRATION
+  # ===========================================================================
+  - id: objectives
+    type: info
+    title: "Objectives & Exfiltration"
+    content: "Complete agreed objectives and demonstrate impact with minimal footprint."
+    children:
+      - id: obj_complete
+        type: checklist
+        title: "Complete engagement objectives"
+        content: |
+          For each agreed objective, capture evidence:
+          - Screenshot with hostname + date/time visible
+          - whoami /all proving identity and privileges
+          - File listing or partial contents of target data (confirm data handling rules first)
+          - Network diagram showing path taken from initial access to objective
+
+      - id: obj_exfil
+        type: checklist
+        title: "Simulated data exfiltration (if in scope)"
+        content: |
+          Test DLP / egress monitoring with canary/synthetic data only — never real data:
+          - DNS exfiltration: dnscat2, iodine
+          - HTTPS to C2 (baseline)
+          - Cloud storage upload: OneDrive, Google Drive, Dropbox (test if blocked)
+          - ICMP tunnelling
+          Document which channels were blocked and which succeeded.
+
+      - id: obj_debrief
+        type: checklist
+        title: "Debrief preparation"
+        content: |
+          Compile full attack narrative before cleanup:
+          - Timeline of all significant actions (timestamps, source IP, target)
+          - Initial access vector used
+          - Credentials obtained (hashed only — do not include plaintext in reports)
+          - Systems accessed and method of access
+          - Persistence mechanisms installed (for cleanup checklist)
+          - Objectives completed with evidence references
+          - Detection opportunities: what Blue Team should have caught and when
+
+  # ===========================================================================
+  # CLEANUP
+  # ===========================================================================
+  - id: cleanup
+    type: info
+    title: "Cleanup"
+    content: "Remove all artefacts and confirm environment is clean before disengaging."
+    children:
+      - id: cleanup_artefacts
+        type: checklist
+        title: "Remove all tools and payloads"
+        content: |
+          - Delete all uploaded binaries, scripts, and payloads from all compromised hosts
+          - Remove all dropped files from USB drops (retrieve devices too)
+          - Remove created user accounts
+          - Disable / delete all persistence mechanisms (scheduled tasks, registry keys, services, WMI subs)
+          - Revert any GPO or ACL changes
+          - Remove C2 implants from all beachhead hosts
+
+      - id: cleanup_confirm
+        type: checklist
+        title: "Confirm cleanup with client"
+        content: |
+          - Provide client with a list of every compromised host for independent verification
+          - Confirm C2 infrastructure is offline / sinkholed
+          - Confirm all credentials obtained have been reset or are being rotated
+          - Sign-off on cleanup completion
+
+  # ===========================================================================
+  # ASSET TRIAGE & CHILD NODE SETUP
+  # ===========================================================================
+  - id: asset_triage
+    type: info
+    title: "Asset Triage & Child Node Setup"
+    content: "Add notable internal assets as child nodes for deeper testing."
+    children:
+      - id: triage_add_assets
+        type: checklist
+        title: "Add discovered assets as child nodes"
+        content: |
+          For internal services worth deeper testing, add child nodes:
+          - Internal web app / intranet → Web Application Testing template
+          - Internal API → API Security Testing template
+          - Desktop application → Thick Client Testing template
+
+          Prioritise assets that are on the path to objectives or handle
+          sensitive data (HR, finance, source code, credentials).

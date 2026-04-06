@@ -149,7 +149,8 @@ class AssetPanel(QWidget):
         self._template_combo.clear()
         self._template_combo.addItem("— no template —", None)
 
-        templates = template_repo.list_templates(self._state.db)
+        all_templates = template_repo.list_templates(self._state.db)
+        templates = [t for t in all_templates if t.get("tier", "asset") == "asset"]
 
         if self._all_versions_chk.isChecked():
             first_group = True

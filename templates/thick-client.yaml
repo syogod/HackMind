@@ -1,6 +1,7 @@
 name: "Thick Client Application Testing"
 version: "1.0.0"
 author: "HackMind"
+tier: asset
 description: >
   Thick client (desktop application) penetration testing methodology based on
   the OWASP Desktop App Security Top 10. Covers injections, authentication,

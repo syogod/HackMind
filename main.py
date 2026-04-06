@@ -18,6 +18,11 @@ from hackmind.ui.main_window import MainWindow
 from hackmind.ui.themes import apply_theme, saved_theme_name
 
 _BUNDLED_TEMPLATES = [
+    # Engagement templates (tier: engagement)
+    Path("templates/bug-bounty.yaml"),
+    Path("templates/internal-pentest.yaml"),
+    Path("templates/red-team.yaml"),
+    # Asset templates (tier: asset)
     Path("templates/web-app.yaml"),
     Path("templates/android-mobile.yaml"),
     Path("templates/thick-client.yaml"),

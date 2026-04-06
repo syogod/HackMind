@@ -100,8 +100,9 @@ class QuestionPanel(QWidget):
             self._clear_btn.hide()
 
     def _rebuild_bootstrap_options(self, current_key: str | None) -> None:
-        """Show available DB templates as answer choices."""
-        templates = template_repo.list_templates(self._state.db)
+        """Show available asset-tier DB templates as answer choices."""
+        all_templates = template_repo.list_templates(self._state.db)
+        templates = [t for t in all_templates if t.get("tier", "asset") == "asset"]
 
         if not templates:
             self._options_layout.addWidget(

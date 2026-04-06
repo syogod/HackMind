@@ -1,0 +1,388 @@
+name: "Bug Bounty Program"
+version: "1.0.0"
+author: "HackMind"
+tier: engagement
+description: >
+  Top-level program recon template for bug bounty engagements.
+  Covers program setup, ASN and IP range discovery, certificate transparency,
+  subdomain enumeration, live host identification, OSINT, and code/secret exposure.
+  As assets are discovered, add them as child nodes and select an appropriate template
+  (e.g. Web Application, API Testing, Android Mobile).
+
+nodes:
+  # ===========================================================================
+  # PROGRAM SETUP
+  # ===========================================================================
+  - id: program_setup
+    type: info
+    title: "Program Setup"
+    content: "Record program details and scope before any enumeration."
+    children:
+      - id: setup_policy
+        type: checklist
+        title: "Read and record the program policy"
+        content: |
+          - Save a copy of the program brief / rules of engagement
+          - Note the bug bounty platform (HackerOne, Bugcrowd, Intigriti, private, etc.)
+          - Record the program URL and your submission portal link
+          - Note any safe harbour / legal authorisation language
+
+      - id: setup_scope
+        type: checklist
+        title: "Define in-scope and out-of-scope assets"
+        content: |
+          In-scope — record each explicitly:
+          - Domains / wildcard domains (*.example.com)
+          - IP ranges or CIDRs
+          - Mobile apps (platform + app ID)
+          - APIs (base URLs, versions)
+          - Source code repositories
+
+          Out-of-scope — note explicitly to avoid wasted effort:
+          - Third-party providers (CDN, payment processors, etc.)
+          - Employee SSO / identity providers unless stated
+          - Specific subdomains or paths excluded
+
+      - id: setup_rewards
+        type: checklist
+        title: "Note reward structure and priority targets"
+        content: |
+          - Record bounty ranges by severity (critical / high / medium / low)
+          - Identify highest-reward asset classes (e.g. main app vs. marketing site)
+          - Note any bonus targets or recently-added scope
+          - Check for a Hall of Fame or disclosed reports on the platform for prior bugs
+
+  # ===========================================================================
+  # ASN & IP RANGE DISCOVERY
+  # ===========================================================================
+  - id: asn_discovery
+    type: info
+    title: "ASN & IP Range Discovery"
+    content: "Identify all IP space owned by the target organisation before subdomain work."
+    children:
+      - id: asn_whois
+        type: checklist
+        title: "WHOIS and org lookup"
+        content: |
+          Start with the primary domain to find the registered org name:
+          - whois <domain> | grep -i "org\|registrant\|owner"
+          - Use the org name for all subsequent ASN queries
+
+      - id: asn_enum
+        type: checklist
+        title: "Enumerate ASNs for the organisation"
+        content: |
+          - amass intel -org "Target Corp"
+          - bgp.he.net — search by org name, note all AS numbers
+          - https://search.arin.net — search org name, check Networks tab
+          - whois -h whois.radb.net -- '-i origin AS<num>' (get prefixes per ASN)
+          - asnlookup -o "Target Corp"   (pip install asnlookup)
+
+      - id: asn_cidr
+        type: checklist
+        title: "Expand ASNs to CIDR blocks"
+        content: |
+          For each discovered ASN:
+          - whois -h whois.radb.net -- '-i origin AS<num>' | grep ^route
+          - bgp.he.net/AS<num>#_prefixes
+          - https://ipinfo.io/AS<num>   (JSON output includes prefixes)
+          - Save all CIDRs to a file for port scanning later
+
+      - id: asn_reverse_whois
+        type: checklist
+        title: "Reverse WHOIS for additional domains"
+        content: |
+          Find other domains registered under the same org:
+          - viewdns.info/reversewhois/ — search by registrant org name or email
+          - whoxy.com reverse WHOIS
+          - domaintools.com (paid, most comprehensive)
+          - Note any new root domains not listed in the original scope
+
+  # ===========================================================================
+  # CERTIFICATE TRANSPARENCY
+  # ===========================================================================
+  - id: cert_transparency
+    type: info
+    title: "Certificate Transparency"
+    content: "Mine CT logs for subdomains and related domains before active enumeration."
+    children:
+      - id: ct_crtsh
+        type: checklist
+        title: "Query crt.sh"
+        content: |
+          - https://crt.sh/?q=%25.<domain>&output=json
+          - curl -s "https://crt.sh/?q=%25.target.com&output=json" | jq -r '.[].name_value' | sort -u
+          - Look for wildcard certs (*.internal.target.com) — reveals subdomain patterns
+          - Check the issuer field — internal CAs can reveal internal PKI hostnames
+
+      - id: ct_tools
+        type: checklist
+        title: "CT log tools and additional sources"
+        content: |
+          - certspotter: https://sslmate.com/certspotter/api/
+          - subfinder includes CT log sources automatically
+          - chaos.projectdiscovery.io — pre-enumerated datasets (check if target is present)
+          - Columbus Project: https://columbus.elmasy.com/
+
+  # ===========================================================================
+  # SUBDOMAIN ENUMERATION
+  # ===========================================================================
+  - id: subdomain_enum
+    type: info
+    title: "Subdomain Enumeration"
+    content: "Combine passive and active techniques for maximum coverage."
+    children:
+      - id: subs_passive
+        type: checklist
+        title: "Passive enumeration (no direct contact)"
+        content: |
+          Run all of these and merge output:
+          - subfinder -d target.com -all -recursive -o subfinder.txt
+          - amass enum -passive -d target.com -o amass_passive.txt
+          - assetfinder --subs-only target.com
+          - github-subdomains -d target.com -t <GITHUB_TOKEN>
+          - VirusTotal: https://www.virustotal.com/gui/domain/target.com/relations
+          - SecurityTrails, Shodan, Censys (manual or API)
+          - Merge and deduplicate: cat *.txt | sort -u > all_subs.txt
+
+      - id: subs_active
+        type: checklist
+        title: "Active DNS brute-force"
+        content: |
+          - puredns brute /opt/SecLists/Discovery/DNS/dns-Jhaddix.txt target.com -r resolvers.txt -w brute.txt
+          - puredns resolve all_subs.txt -r resolvers.txt -w resolved.txt
+          - dnsx -l resolved.txt -a -cname -resp -o dnsx_out.txt
+          - Merge brute results back into all_subs.txt
+
+      - id: subs_permutations
+        type: checklist
+        title: "Subdomain permutations and alterations"
+        content: |
+          Generate permutations based on discovered subdomains:
+          - gotator -sub resolved.txt -perm /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt -depth 1 -numbers 10
+          - alterx -l resolved.txt | dnsx -r resolvers.txt
+          Focus on: dev-, staging-, test-, api-, internal-, admin-, vpn-, uat-
+
+      - id: subs_takeover
+        type: checklist
+        title: "Check for subdomain takeover candidates"
+        content: |
+          - nuclei -l resolved.txt -t takeovers/
+          - subjack -w resolved.txt -t 100 -ssl -o subjack.txt
+          - Look for CNAME pointing to: GitHub Pages, S3, Heroku, Fastly, Zendesk,
+            Shopify, Azure, Surge.sh, Readme.io, Unbounce, etc.
+          - Any CNAME that resolves to NXDOMAIN is a high-priority candidate
+
+  # ===========================================================================
+  # LIVE HOST & SERVICE DISCOVERY
+  # ===========================================================================
+  - id: live_hosts
+    type: info
+    title: "Live Host & Service Discovery"
+    content: "Identify which discovered assets are actually alive and what services they run."
+    children:
+      - id: live_httpx
+        type: checklist
+        title: "HTTP/S probing on subdomains"
+        content: |
+          - httpx -l all_subs.txt -title -status-code -tech-detect -ports 80,443,8080,8443,8888 -o httpx_out.txt
+          - Review for: dev/staging/test/admin panels, non-200 on main paths,
+            interesting tech stacks, login portals, API bases
+
+      - id: live_portscan
+        type: checklist
+        title: "Port scan discovered IP ranges"
+        content: |
+          Fast sweep across all CIDRs first, then deep scan:
+          - masscan -p1-65535 <CIDR> --rate=10000 -oG masscan.txt
+          - Extract live IPs: grep "open" masscan.txt | awk '{print $4}' | sort -u > live_ips.txt
+          - nmap -sV -sC -iL live_ips.txt --min-rate 3000 -oA nmap_services
+
+          Interesting ports to flag immediately:
+          - 8080, 8443, 8888, 9000, 9090 — dev/alt web
+          - 9200, 9300 — Elasticsearch
+          - 3306, 5432, 6379, 27017 — databases
+          - 2375, 2376 — Docker API
+          - 6443, 8001 — Kubernetes API
+          - 4848 — GlassFish admin
+          - 7070, 8161 — JBoss/ActiveMQ
+          - 22, 3389, 5900 — remote access
+
+      - id: live_screenshots
+        type: checklist
+        title: "Screenshot live web services"
+        content: |
+          Quickly triage large numbers of web services visually:
+          - gowitness file -f httpx_out.txt
+          - eyewitness --web -f httpx_out.txt
+          Review screenshots for: login pages, admin panels, default installs,
+          error pages leaking tech info, internal-looking dashboards
+
+  # ===========================================================================
+  # OSINT & GOOGLE DORKING
+  # ===========================================================================
+  - id: osint
+    type: info
+    title: "OSINT & Google Dorking"
+    content: "Passive intelligence gathering from public sources."
+    children:
+      - id: osint_dorks
+        type: checklist
+        title: "Google / Bing dorks"
+        content: |
+          - site:target.com filetype:pdf OR filetype:xlsx OR filetype:env OR filetype:sql
+          - site:target.com inurl:admin OR inurl:login OR inurl:dashboard OR inurl:portal
+          - site:target.com "index of /" OR "directory listing"
+          - site:target.com ext:log OR ext:bak OR ext:conf OR ext:config
+          - site:target.com "internal use only" OR "not for public" OR "confidential"
+          - intitle:"500 Internal Server Error" site:target.com
+          - "target.com" "api_key" OR "secret_key" OR "password" site:pastebin.com
+          - "target.com" "api_key" OR "secret" OR "token" site:github.com
+
+      - id: osint_shodan_censys
+        type: checklist
+        title: "Shodan / Censys / FOFA"
+        content: |
+          Shodan:
+          - hostname:target.com
+          - org:"Target Corp"
+          - ssl:"target.com"
+          - ssl.cert.subject.cn:target.com
+          Note: exposed services, default banners, SSL cert SANs for new subdomains
+
+          Censys:
+          - parsed.names: target.com
+          - autonomous_system.name: "Target Corp"
+
+          FOFA / Netlas / ZoomEye — cross-check for assets Shodan misses
+
+      - id: osint_email_employees
+        type: checklist
+        title: "Employee and email enumeration"
+        content: |
+          Useful for understanding tech stack and finding exposed credential leaks:
+          - hunter.io — find employee email format and names
+          - LinkedIn — enumerate engineering/security team for tech stack clues
+          - Have I Been Pwned (API) — check corporate email domains in breach data
+          - dehashed.com — search for domain in credential dumps
+          - theHarvester -d target.com -b all
+
+      - id: osint_wayback
+        type: checklist
+        title: "Wayback Machine / archive mining"
+        content: |
+          - gau target.com | sort -u > gau_urls.txt  (fetches wayback + otx + commoncrawl)
+          - waybackurls target.com >> gau_urls.txt
+          - grep for: /api/, /admin/, /debug/, /test/, /backup/, .env, .git, .DS_Store
+          - katana -u target.com -jc -d 3 -o katana.txt  (also crawls JS endpoints)
+          - Check for old endpoints that may have been removed but still respond
+
+  # ===========================================================================
+  # CODE & SECRET EXPOSURE
+  # ===========================================================================
+  - id: code_exposure
+    type: question
+    title: "Does the target organisation have a public GitHub / GitLab / Bitbucket org?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: code_find_org
+            type: checklist
+            title: "Find and enumerate the org"
+            content: |
+              - github.com/<org> — browse repos, note languages and frameworks
+              - gitlab.com/<org>
+              - Search: site:github.com "target.com" OR "Target Corp"
+              - github-search: org:<org> — list all public repos
+              - Note forks of internal-looking repos (may expose old commits)
+
+          - id: code_secret_scan
+            type: checklist
+            title: "Scan repos for secrets and sensitive data"
+            content: |
+              Clone all public repos then scan:
+              - gh repo list <org> --limit 1000 --json nameWithOwner -q '.[].nameWithOwner' | \
+                xargs -I{} gh repo clone {}
+              - trufflehog github --org=<org> --only-verified
+              - gitleaks detect --source . -r gitleaks_report.json
+              Look for: API keys, tokens, passwords, internal hostnames, DB connection strings,
+              AWS/GCP/Azure credentials, .env files committed accidentally
+
+          - id: code_github_dorks
+            type: checklist
+            title: "GitHub search dorks"
+            content: |
+              Search directly on github.com or via API:
+              - org:<org> "api_key" OR "apikey" OR "api-key"
+              - org:<org> "secret" OR "password" OR "passwd"
+              - org:<org> "access_token" OR "auth_token" OR "bearer"
+              - org:<org> "BEGIN RSA PRIVATE KEY" OR "BEGIN OPENSSH PRIVATE KEY"
+              - org:<org> filename:.env OR filename:config.yml OR filename:secrets.yml
+              - org:<org> "internal.target.com" OR "staging.target.com"
+              - Also search for the domain without the org filter — contractors and ex-employees
+                sometimes commit code referencing internal endpoints
+
+          - id: code_commit_history
+            type: checklist
+            title: "Review commit history for removed secrets"
+            content: |
+              Secrets removed in a later commit are still in git history:
+              - git log --all --oneline | head -100
+              - git log --all -p | grep -i "key\|secret\|password\|token" | head -200
+              - trufflehog git file://. --since-commit HEAD~500
+              - gitjacker (looks for exposed .git directories on web servers too)
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # ===========================================================================
+  # ASSET TRIAGE & CHILD NODE SETUP
+  # ===========================================================================
+  - id: asset_triage
+    type: info
+    title: "Asset Triage & Child Node Setup"
+    content: "Prioritise discovered assets and add them as child nodes with the appropriate template."
+    children:
+      - id: triage_prioritise
+        type: checklist
+        title: "Prioritise assets for testing"
+        content: |
+          Rank discovered assets by likely impact:
+          - Main application / primary domain — highest priority
+          - Admin panels, internal-facing apps, staging environments
+          - APIs (especially undocumented or versioned ones)
+          - Mobile apps if in scope
+          - Marketing/informational sites — lower priority unless scope pays for them
+
+          Signal higher-value targets:
+          - Login portals (auth bugs, IDOR)
+          - Payment or checkout flows
+          - File upload functionality
+          - Anything labelled internal, admin, staff, corp
+
+      - id: triage_add_assets
+        type: checklist
+        title: "Add discovered assets as child nodes"
+        content: |
+          For each prioritised asset, add a child node under this program and select
+          the matching template:
+          - Web application → Web Application Testing template
+          - REST / GraphQL API → API Security Testing template
+          - Android app → Android Mobile App Testing template
+          - iOS app → iOS Mobile App Testing template (if available)
+          - Thick client → Thick Client Testing template
+
+          Track which assets you've added so nothing gets missed.
+
+      - id: triage_notes
+        type: checklist
+        title: "Record any interesting findings from recon"
+        content: |
+          Before diving into individual asset testing, document anything notable:
+          - Unexpected open ports or services on the IP range
+          - Subdomains that look internal or misconfigured
+          - Any secrets or credentials found in code / pastes
+          - Tech stack patterns across assets (same framework everywhere = one bug hits all)
+          - Login portals with default credentials worth trying early

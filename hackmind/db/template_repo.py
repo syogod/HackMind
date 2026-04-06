@@ -26,17 +26,18 @@ def store_template(db: Database, template: Template, raw_yaml: str) -> None:
     with db.conn:
         db.conn.execute(
             """
-            INSERT INTO templates (id, name, version, source_file, data, imported_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO templates (id, name, version, tier, source_file, data, imported_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE
                SET name        = excluded.name,
                    version     = excluded.version,
+                   tier        = excluded.tier,
                    source_file = excluded.source_file,
                    data        = excluded.data,
                    imported_at = excluded.imported_at
             """,
             (
-                template.id, template.name, template.version,
+                template.id, template.name, template.version, template.tier,
                 template.source_file, raw_yaml, now,
             ),
         )
@@ -48,7 +49,7 @@ def list_templates(db: Database) -> list[dict]:
     Each entry: {id, name, version, source_file, imported_at}
     """
     rows = db.conn.execute(
-        "SELECT id, name, version, source_file, imported_at FROM templates ORDER BY imported_at DESC"
+        "SELECT id, name, version, tier, source_file, imported_at FROM templates ORDER BY imported_at DESC"
     ).fetchall()
     return [dict(r) for r in rows]
 

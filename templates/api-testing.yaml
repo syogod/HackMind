@@ -1,6 +1,7 @@
 name: "API Security Testing"
 version: "1.0.0"
 author: "HackMind"
+tier: asset
 description: >
   Comprehensive API penetration testing methodology covering OWASP API Security
   Top 10 (2023), authentication mechanism-specific tests, and the most common

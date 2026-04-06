@@ -158,5 +158,6 @@ class Template:
     version: str
     author: str
     description: str
+    tier: str = "asset"           # "engagement" | "asset"
     nodes: list[TemplateNode] = field(default_factory=list)
     source_file: Optional[str] = None

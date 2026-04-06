@@ -1,6 +1,7 @@
 name: "Android Mobile App Testing"
 version: "1.0.0"
 author: "HackMind"
+tier: asset
 description: >
   Android application penetration testing methodology covering
   static analysis, dynamic analysis, network traffic, data storage,

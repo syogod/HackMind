@@ -6,12 +6,15 @@ A desktop pentesting methodology assistant. Load a structured checklist template
 
 ## Features
 
-- **Methodology templates** — YAML-based trees covering Web App, Android Mobile, Thick Client, and API Security (OWASP API Top 10 + bug bounty extras). Import your own or build custom ones with the built-in template editor.
+- **Methodology templates** — YAML-based trees in two tiers:
+  - *Engagement templates* (program-level recon): Bug Bounty Program, Internal Penetration Test, Red Team Operation.
+  - *Asset templates* (per-target methodology): Web App, Android Mobile, Thick Client, API Security (OWASP API Top 10 + bug bounty extras).
+  - Import your own or build custom ones with the built-in template editor.
 - **Branching questionnaires** — Question nodes narrow the methodology to what's actually in scope (e.g., "Does the API use JWT?" spawns a JWT-specific checklist; answering "No" hides it entirely).
 - **Per-node notes & attachments** — Freeform notes with auto-save and file attachments on every checklist item.
 - **Scope filtering** — Tag nodes and filter the tree to a specific scope (e.g., only show items relevant to `authentication`).
 - **Multiple assets per project** — Add sub-assets (discovered domains, APIs, services) under the root target, each with its own template instance.
-- **Findings tracking** — Mark any checklist item as a finding for quick review.
+- **Findings tracking** — Mark any checklist item as a finding for quick review; set status to **Vulnerable** when an issue is confirmed.
 - **Portable data** — Everything lives in one `.db` file. Back it up, move it, or share it by copying that file.
 
 ---
@@ -98,8 +101,9 @@ The path can be changed at any time via **File → Settings**.
 ### Creating a project
 
 1. Launch HackMind — the welcome screen lists recent projects.
-2. Click **New Project…**, enter a project name (e.g., `ACME Corp Penetration Test`) and a root target (e.g., `ACME Corp`).
-3. The project opens with the root asset selected. From the **Add Sub-Asset** panel on the right, give the asset a name, choose a template, and click **Add Asset**.
+2. Click **New Project…**, enter a project name (e.g., `ACME Corp Penetration Test`) and a root target (e.g., `acme.com`).
+3. Optionally select an **Engagement Type** (e.g., *Bug Bounty Program* or *Internal Penetration Test*) — this loads a program-level recon checklist at the project root. Leave blank for a plain project with no top-level template.
+4. The project opens with the root asset selected. From the **Add Sub-Asset** panel on the right, give the asset a name, choose an asset template, and click **Add Asset**.
 
 ### Navigating the tree
 
@@ -122,10 +126,12 @@ Each checklist node has a status selector:
 | Not Started | Default |
 | In Progress | Actively being tested |
 | Complete | Tested, no finding |
+| Vulnerable | Vulnerability identified |
 | N/A | Not applicable |
-| Finding | Issue identified |
 
 Status changes are reflected immediately in the tree (colour-coded icons).
+
+Use the **Mark as Finding** checkbox to flag a node for quick review independently of its status.
 
 ### Notes and attachments
 
@@ -153,6 +159,7 @@ name: My Template
 version: "1.0.0"
 author: Your Name
 description: Short description
+tier: asset          # "asset" (default) or "engagement"
 
 tree:
   id: root
@@ -189,6 +196,10 @@ tree:
 - `info` — read-only informational node
 - `question` — branching node; uses `options` instead of `children`
 
+**Template tiers:**
+- `asset` — shown in the *Add Sub-Asset* template picker; applied per target (default)
+- `engagement` — shown in the *New Project* engagement type picker; loaded at the project root to provide program-level recon steps
+
 ---
 
 ## Settings
@@ -199,7 +210,9 @@ tree:
 |---------|-------------|
 | Database path | Where the `.db` file is stored. Takes effect on restart. |
 | Note auto-save delay | How long after the last keystroke before notes are saved (100–5000 ms). |
-| Theme | Light or dark UI theme. Applied immediately. |
+| Theme | UI colour theme. Applied immediately. |
+
+Themes can also be switched without opening Settings via **View → Theme**. Available themes: Dark, Dracula, Solarized Dark, Light, Matrix, Nord, Monokai.
 
 ---
 
@@ -222,4 +235,4 @@ pytest
 python main.py
 ```
 
-Adding a new bundled template: place the `.yaml` file in `templates/` and add its path to `_BUNDLED_TEMPLATES` in [main.py](main.py).
+Adding a new bundled template: place the `.yaml` file in `templates/` and add its path to `_BUNDLED_TEMPLATES` in [main.py](main.py). Set `tier: engagement` for program-level templates or `tier: asset` (or omit it) for per-target templates.

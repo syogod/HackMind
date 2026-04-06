@@ -66,10 +66,16 @@ def _sort_tnodes(tnodes: list[TemplateNode]) -> list[TemplateNode]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def instantiate_project(db: Database, project_id: str, target_name: str) -> None:
+def instantiate_project(
+    db: Database,
+    project_id: str,
+    target_name: str,
+    template_id: str | None = None,
+) -> None:
     """
     Create the root asset node for a new project, named after the target.
-    No bootstrap question — the root is a container, not a typed asset.
+    If *template_id* is provided (an engagement template), its nodes are
+    instantiated directly under the root asset.
     """
     root = Node(
         project_id=project_id,
@@ -77,8 +83,20 @@ def instantiate_project(db: Database, project_id: str, target_name: str) -> None
         type=NodeType.ASSET,
         title=target_name,
         position=0,
+        template_id=template_id,
     )
     node_repo.insert_node(db, root)
+
+    if template_id is not None:
+        raw = template_repo.get_template_raw(db, template_id)
+        if raw is not None:
+            template = load_template_from_db_row(raw)
+            for i, tnode in enumerate(_sort_tnodes(template.nodes)):
+                _instantiate_node(
+                    db, project_id, tnode,
+                    parent_id=root.id, position=i,
+                    template_id=template_id,
+                )
 
 
 def add_asset(

@@ -77,12 +77,19 @@ def _parse_template(data: dict, source_file: str | None) -> Template:
     seen_ids: set[str] = set()
     nodes = [_parse_node(n, seen_ids, context="nodes") for n in _as_list(data, "nodes")]
 
+    tier = str(data.get("tier", "asset"))
+    if tier not in ("engagement", "asset"):
+        raise TemplateValidationError(
+            f"Invalid tier '{tier}'. Must be 'engagement' or 'asset'."
+        )
+
     return Template(
         id=str(uuid.uuid4()),
         name=str(data["name"]),
         version=str(data["version"]),
         author=str(data.get("author", "unknown")),
         description=str(data.get("description", "")),
+        tier=tier,
         nodes=nodes,
         source_file=source_file,
     )
