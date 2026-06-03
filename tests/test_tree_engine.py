@@ -16,11 +16,11 @@ Template structure:
     option "api":
       check_api (checklist)
 
-New flow:
-  1. instantiate_project → creates "Target Scope" INFO node
-  2. add_asset → creates asset node + bootstrap "Asset type?" question
-  3. answer_asset_type → loads template under the bootstrap question
-  4. answer_question → expands template question nodes
+Current flow:
+  1. instantiate_project → creates the root "Target Scope" ASSET node
+  2. add_asset(..., template_id=T) → creates an asset node and instantiates
+     template T's top-level nodes directly under it (no bootstrap question)
+  3. answer_question → expands template question nodes when answered
 """
 
 import textwrap
@@ -33,9 +33,7 @@ from hackmind.db.database import Database
 from hackmind.db.project_repo import create_project
 from hackmind.engine.template_loader import load_template_from_string
 from hackmind.engine.tree_engine import (
-    ASSET_TYPE_NODE_ID,
     add_asset,
-    answer_asset_type,
     answer_question,
     clear_question,
     instantiate_project,
@@ -117,11 +115,8 @@ def _node_by_tid(db, project_id, tid):
 
 
 def _setup_asset(db, proj, db_template_id, title="test.com"):
-    """Create an asset and load the template via the bootstrap question."""
-    asset = add_asset(db, proj.id, None, title)
-    bootstrap_q = node_repo.get_children(db, asset.id)[0]
-    answer_asset_type(db, bootstrap_q.id, db_template_id)
-    return asset, bootstrap_q
+    """Create an asset with the chosen template instantiated directly under it."""
+    return add_asset(db, proj.id, None, title, template_id=db_template_id)
 
 
 # ---------------------------------------------------------------------------
@@ -161,26 +156,46 @@ def test_add_asset_creates_asset_node(
     assert fetched.title == "api.example.com"
 
 
-def test_add_asset_spawns_bootstrap_question(
+def test_add_asset_without_template_has_no_children(
     db: Database, proj: Project
 ) -> None:
-    asset = add_asset(db, proj.id, None, "test.com")
+    """A bare asset (no template chosen) has no children."""
+    asset = add_asset(db, proj.id, None, "bare.com")
+    assert node_repo.get_children(db, asset.id) == []
+
+
+def test_add_asset_with_template_instantiates_top_level(
+    db: Database, proj: Project, db_template_id: str
+) -> None:
+    """Passing template_id instantiates the template's top-level nodes under the asset."""
+    asset = add_asset(db, proj.id, None, "test.com", template_id=db_template_id)
     children = node_repo.get_children(db, asset.id)
     assert len(children) == 1
     assert children[0].type == NodeType.QUESTION
-    assert children[0].template_node_id == ASSET_TYPE_NODE_ID
+    assert children[0].template_node_id == "root_question"
 
 
-def test_two_assets_have_independent_bootstrap_questions(
-    db: Database, proj: Project
+def test_add_asset_with_template_does_not_expand_questions(
+    db: Database, proj: Project, db_template_id: str
 ) -> None:
-    asset1 = add_asset(db, proj.id, None, "a.com")
-    asset2 = add_asset(db, proj.id, None, "b.com")
+    """Question option children are lazy — only root_question exists until answered."""
+    add_asset(db, proj.id, None, "test.com", template_id=db_template_id)
+    tids = {n.template_node_id for n in _all_project_nodes(db, proj.id)}
+    assert "root_question" in tids
+    assert "info_section" not in tids
+    assert "check_api" not in tids
 
-    q1 = node_repo.get_children(db, asset1.id)[0]
-    q2 = node_repo.get_children(db, asset2.id)[0]
 
-    assert q1.id != q2.id
+def test_add_asset_sets_template_id_on_instantiated_nodes(
+    db: Database, proj: Project, db_template_id: str
+) -> None:
+    add_asset(db, proj.id, None, "test.com", template_id=db_template_id)
+    template_nodes = [
+        n for n in _all_project_nodes(db, proj.id)
+        if n.template_node_id is not None
+    ]
+    assert template_nodes
+    assert all(n.template_id == db_template_id for n in template_nodes)
 
 
 def test_add_asset_positions_increment(
@@ -196,56 +211,22 @@ def test_add_asset_positions_increment(
     assert a2.position == 1
 
 
-# ---------------------------------------------------------------------------
-# answer_asset_type
-# ---------------------------------------------------------------------------
-
-def test_answer_asset_type_instantiates_template(
+def test_add_asset_nests_under_parent_asset(
     db: Database, proj: Project, db_template_id: str
 ) -> None:
-    asset, bootstrap_q = _setup_asset(db, proj, db_template_id)
-    nodes = _all_project_nodes(db, proj.id)
-    tids = {n.template_node_id for n in nodes}
-    assert "root_question" in tids
+    """Sub-assets (e.g. Internal Network -> Domain Controller) nest correctly."""
+    parent = add_asset(db, proj.id, None, "Internal Network", template_id=db_template_id)
+    child = add_asset(db, proj.id, parent.id, "DC01", template_id=db_template_id)
 
-
-def test_answer_asset_type_records_answer(
-    db: Database, proj: Project, db_template_id: str
-) -> None:
-    asset, bootstrap_q = _setup_asset(db, proj, db_template_id)
-    ans = node_repo.get_answer(db, bootstrap_q.id)
-    assert ans is not None
-    assert ans.option_key == db_template_id
-
-
-def test_answer_asset_type_sets_template_id_on_nodes(
-    db: Database, proj: Project, db_template_id: str
-) -> None:
-    asset, bootstrap_q = _setup_asset(db, proj, db_template_id)
-    nodes = _all_project_nodes(db, proj.id)
-    template_nodes = [n for n in nodes if n.template_node_id is not None
-                      and n.template_node_id != ASSET_TYPE_NODE_ID]
-    assert all(n.template_id == db_template_id for n in template_nodes)
-
-
-def test_answer_asset_type_same_template_twice_is_idempotent(
-    db: Database, proj: Project, db_template_id: str
-) -> None:
-    asset, bootstrap_q = _setup_asset(db, proj, db_template_id)
-    count_after_first = len(_all_project_nodes(db, proj.id))
-    answer_asset_type(db, bootstrap_q.id, db_template_id)
-    assert len(_all_project_nodes(db, proj.id)) == count_after_first
-
-
-def test_answer_asset_type_question_only_creates_root_question(
-    db: Database, proj: Project, db_template_id: str
-) -> None:
-    """Question node children should NOT be created until answered."""
-    asset, bootstrap_q = _setup_asset(db, proj, db_template_id)
-    children = node_repo.get_children(db, bootstrap_q.id)
-    # Only root_question — no option children yet
-    assert len(children) == 1
-    assert children[0].type == NodeType.QUESTION
+    assert child.parent_id == parent.id
+    nested_assets = [
+        n for n in node_repo.get_children(db, parent.id)
+        if n.type == NodeType.ASSET
+    ]
+    assert child.id in {n.id for n in nested_assets}
+    # the nested asset has its own independent template instance
+    child_tids = {c.template_node_id for c in node_repo.get_children(db, child.id)}
+    assert "root_question" in child_tids
 
 
 # ---------------------------------------------------------------------------
@@ -439,11 +420,11 @@ def test_clear_then_reanswer_restores_subtree(
 def test_two_assets_have_independent_template_trees(
     db: Database, proj: Project, db_template_id: str
 ) -> None:
-    asset1, bq1 = _setup_asset(db, proj, db_template_id, "a.com")
-    asset2, bq2 = _setup_asset(db, proj, db_template_id, "b.com")
+    asset1 = _setup_asset(db, proj, db_template_id, "a.com")
+    asset2 = _setup_asset(db, proj, db_template_id, "b.com")
 
-    rq1_children = node_repo.get_children(db, bq1.id)
-    rq2_children = node_repo.get_children(db, bq2.id)
+    rq1_children = node_repo.get_children(db, asset1.id)
+    rq2_children = node_repo.get_children(db, asset2.id)
 
     assert len(rq1_children) == 1
     assert len(rq2_children) == 1
@@ -453,11 +434,11 @@ def test_two_assets_have_independent_template_trees(
 def test_answering_question_on_one_asset_does_not_affect_other(
     db: Database, proj: Project, db_template_id: str
 ) -> None:
-    asset1, bq1 = _setup_asset(db, proj, db_template_id, "a.com")
-    asset2, bq2 = _setup_asset(db, proj, db_template_id, "b.com")
+    asset1 = _setup_asset(db, proj, db_template_id, "a.com")
+    asset2 = _setup_asset(db, proj, db_template_id, "b.com")
 
-    rq1 = node_repo.get_children(db, bq1.id)[0]
+    rq1 = node_repo.get_children(db, asset1.id)[0]
     answer_question(db, rq1.id, "webapp")
 
-    rq2 = node_repo.get_children(db, bq2.id)[0]
+    rq2 = node_repo.get_children(db, asset2.id)[0]
     assert node_repo.get_answer(db, rq2.id) is None

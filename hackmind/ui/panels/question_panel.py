@@ -4,9 +4,6 @@ Question node panel.
 Displays the question text and one button per answer option.
 When an option is selected the tree engine is called, then
 tree_changed is emitted so the main window refreshes the tree.
-
-Bootstrap questions (template_node_id == ASSET_TYPE_NODE_ID) are handled
-specially: the options are the DB-stored templates rather than YAML options.
 """
 
 from PyQt6.QtCore import pyqtSignal
@@ -21,7 +18,6 @@ from PyQt6.QtWidgets import (
 
 from hackmind.db import node_repo, template_repo
 from hackmind.engine import tree_engine
-from hackmind.engine.tree_engine import ASSET_TYPE_NODE_ID
 from hackmind.ui.app_state import AppState
 from hackmind.models.types import Node
 
@@ -70,12 +66,6 @@ class QuestionPanel(QWidget):
         self._title.setText(node.title)
         self._rebuild_options()
 
-    def _is_bootstrap(self) -> bool:
-        return (
-            self._node is not None
-            and self._node.template_node_id == ASSET_TYPE_NODE_ID
-        )
-
     def _rebuild_options(self) -> None:
         if self._node is None:
             return
@@ -89,47 +79,12 @@ class QuestionPanel(QWidget):
         answer = node_repo.get_answer(self._state.db, self._node.id)
         current_key = answer.option_key if answer else None
 
-        if self._is_bootstrap():
-            self._rebuild_bootstrap_options(current_key)
-        else:
-            self._rebuild_template_options(current_key)
+        self._rebuild_template_options(current_key)
 
         if current_key:
             self._clear_btn.show()
         else:
             self._clear_btn.hide()
-
-    def _rebuild_bootstrap_options(self, current_key: str | None) -> None:
-        """Show available asset-tier DB templates as answer choices."""
-        all_templates = template_repo.list_templates(self._state.db)
-        templates = [t for t in all_templates if t.get("tier", "asset") == "asset"]
-
-        if not templates:
-            self._options_layout.addWidget(
-                QLabel("No templates available. Import a template first.")
-            )
-            self._answered_label.hide()
-            return
-
-        if current_key:
-            chosen = next((t for t in templates if t["id"] == current_key), None)
-            label = f"{chosen['name']} v{chosen['version']}" if chosen else current_key
-            self._answered_label.setText(f"Current template: {label}")
-            self._answered_label.show()
-        else:
-            self._answered_label.hide()
-
-        for t in templates:
-            label = f"{t['name']} v{t['version']}"
-            btn = QPushButton(label)
-            btn.setObjectName("answerBtn")
-            btn.setProperty("active", t["id"] == current_key)
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-            btn.clicked.connect(
-                lambda checked, tid=t["id"]: self._select_asset_type(tid)
-            )
-            self._options_layout.addWidget(btn)
 
     def _rebuild_template_options(self, current_key: str | None) -> None:
         """Show options from the node's YAML template."""
@@ -163,15 +118,6 @@ class QuestionPanel(QWidget):
             btn.style().polish(btn)
             btn.clicked.connect(lambda checked, key=option.key: self._select(key))
             self._options_layout.addWidget(btn)
-
-    def _select_asset_type(self, db_template_id: str) -> None:
-        if self._node is None:
-            return
-        tree_engine.answer_asset_type(
-            self._state.db, self._node.id, db_template_id
-        )
-        self._rebuild_options()
-        self.tree_changed.emit()
 
     def _select(self, option_key: str) -> None:
         if self._node is None:

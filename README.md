@@ -7,8 +7,9 @@ A desktop pentesting methodology assistant. Load a structured checklist template
 ## Features
 
 - **Methodology templates** — YAML-based trees in two tiers:
-  - *Engagement templates* (program-level recon): Bug Bounty Program, Internal Penetration Test, Red Team Operation.
-  - *Asset templates* (per-target methodology): Web App, Android Mobile, Thick Client, API Security (OWASP API Top 10 + bug bounty extras).
+  - *Engagement templates* (program-level workflow that's consistent across asset types — scope & rules of engagement, attack-surface discovery, asset triage, reporting, closeout): Bug Bounty Program, Internal Penetration Test, Red Team Operation. The hands-on attack methodology lives in asset templates, not here.
+  - *Asset templates* (per-target methodology): Web App (WSTG-aligned and question-driven — profiling questions narrow the tree to the surfaces the target actually exposes), Android Mobile, iOS Mobile, Thick Client, API Security (OWASP API Top 10 + bug bounty extras), plus internal-environment assets — Internal Network (a container that nests the systems below), Domain Controller (Active Directory attacks), Host (Windows/Linux privesc, credential harvesting, lateral movement), Database (per-engine direct-service attacks), and Network Service (question-driven by service: FTP, SSH, Telnet, RDP, VNC, SNMP, NFS, rsync, LDAP, mail, …).
+  - Asset templates can be nested: add an **Internal Network** asset, then add **Domain Controller** / **Host** / **Database** / **Network Service** / **Web App** / **API** sub-assets beneath it.
   - Import your own or build custom ones with the built-in template editor.
 - **Branching questionnaires** — Question nodes narrow the methodology to what's actually in scope (e.g., "Does the API use JWT?" spawns a JWT-specific checklist; answering "No" hides it entirely).
 - **Per-node notes & attachments** — Freeform notes with auto-save and file attachments on every checklist item.
@@ -102,8 +103,10 @@ The path can be changed at any time via **File → Settings**.
 
 1. Launch HackMind — the welcome screen lists recent projects.
 2. Click **New Project…**, enter a project name (e.g., `ACME Corp Penetration Test`) and a root target (e.g., `acme.com`).
-3. Optionally select an **Engagement Type** (e.g., *Bug Bounty Program* or *Internal Penetration Test*) — this loads a program-level recon checklist at the project root. Leave blank for a plain project with no top-level template.
-4. The project opens with the root asset selected. From the **Add Sub-Asset** panel on the right, give the asset a name, choose an asset template, and click **Add Asset**.
+3. Optionally select an **Engagement Type** (e.g., *Bug Bounty Program* or *Internal Penetration Test*) — this loads a program-level workflow checklist (scope, discovery, triage, reporting) at the project root. Leave blank for a plain project with no top-level template.
+4. The project opens with the root asset selected. From the **Add Sub-Asset** panel on the right, give the asset a name, choose an asset template, and click **Add Asset**. Asset templates can be nested — add an *Internal Network* asset, then add *Domain Controller*, *Host*, *Database*, etc. beneath it.
+
+> Both the engagement and asset template pickers show the **latest version** of each template by default. Tick **All versions** to choose an older one.
 
 ### Navigating the tree
 
@@ -161,34 +164,38 @@ author: Your Name
 description: Short description
 tier: asset          # "asset" (default) or "engagement"
 
-tree:
-  id: root
-  type: asset
-  title: Target
-  children:
-    - id: recon
-      type: checklist
-      title: Reconnaissance
-      content: |
-        - Enumerate subdomains
-        - Identify tech stack
-    - id: auth_question
-      type: question
-      title: Authentication mechanism?
-      options:
-        - key: jwt
-          label: JWT
-          children:
-            - id: jwt_checks
-              type: checklist
-              title: JWT Security Checks
-              content: |
-                - Test none algorithm
-                - Test RS256→HS256 confusion
-        - key: none
-          label: No authentication
-          children: []
+nodes:                 # list of top-level nodes
+  - id: root
+    type: asset
+    title: Target
+    children:
+      - id: recon
+        type: checklist
+        title: Reconnaissance
+        content: |
+          - Enumerate subdomains
+          - Identify tech stack
+      - id: auth_question
+        type: question
+        title: Authentication mechanism?
+        options:
+          - key: jwt
+            label: JWT
+            children:
+              - id: jwt_checks
+                type: checklist
+                title: JWT Security Checks
+                content: |
+                  - Test none algorithm
+                  - Test RS256→HS256 confusion
+          - key: none
+            label: No authentication
+            children: []
 ```
+
+> The top-level key is `nodes:` (a list of root nodes), **not** `tree:`.
+> Question nodes use `options:` (each with `key`, `label`, `children`); all other
+> node types use `children:`. Every node needs a unique `id`, a `type`, and a `title`.
 
 **Node types:**
 - `asset` — container node (can hold children, can have sub-assets added to it)
@@ -198,7 +205,7 @@ tree:
 
 **Template tiers:**
 - `asset` — shown in the *Add Sub-Asset* template picker; applied per target (default)
-- `engagement` — shown in the *New Project* engagement type picker; loaded at the project root to provide program-level recon steps
+- `engagement` — shown in the *New Project* engagement type picker; loaded at the project root to provide program-level workflow steps (scope, discovery, triage, reporting)
 
 ---
 

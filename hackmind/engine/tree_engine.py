@@ -17,10 +17,6 @@ Public API
       Add a manually-created node as a child of any existing node.
       Manual nodes are not tied to any template and survive template exports.
 
-  answer_asset_type(db, question_node_id, db_template_id)
-      Record the asset-type answer and instantiate the chosen template
-      under the asset node.
-
   answer_question(db, question_node_id, option_key)
       Record an answer and expand/restore/soft-delete subtrees accordingly.
       The template is resolved from the node's stored template_id.
@@ -42,12 +38,6 @@ from hackmind.models.types import (
     Template,
     TemplateNode,
 )
-
-# Sentinel template_node_id for the bootstrap "Asset type?" question.
-ASSET_TYPE_NODE_ID = "__asset_type__"
-
-# Title shown to the user for the bootstrap question.
-_ASSET_TYPE_QUESTION_TITLE = "What type of asset is this?"
 
 # Display order when sorting spawned siblings: questions first, then info, then checklists.
 _TYPE_SORT_ORDER: dict[NodeType, int] = {
@@ -163,69 +153,6 @@ def add_node(
     )
     node_repo.insert_node(db, node)
     return node
-
-
-def answer_asset_type(
-    db: Database,
-    question_node_id: str,
-    db_template_id: str,
-) -> None:
-    """
-    Record the asset-type selection and instantiate the chosen template
-    directly under the asset node that owns the bootstrap question.
-
-    `db_template_id` is the PK of a row in the templates table.
-
-    Three cases:
-      1. First answer  → load template, instantiate nodes under the asset.
-      2. Answer changed → soft-delete current children, instantiate new ones
-                          (or restore if previously selected).
-      3. Answer reverted → restore the previously soft-deleted subtree.
-    """
-    question_node = node_repo.get_node(db, question_node_id)
-    if question_node is None:
-        raise ValueError(f"Node '{question_node_id}' not found.")
-
-    current_answer = node_repo.get_answer(db, question_node_id)
-
-    # Nothing to do if the same template is re-selected.
-    if current_answer is not None and current_answer.option_key == db_template_id:
-        return
-
-    # Soft-delete currently active children (previous template nodes).
-    if current_answer is not None:
-        active_children = node_repo.get_children(
-            db, question_node_id, include_soft_deleted=False
-        )
-        for child in active_children:
-            node_repo.soft_delete_subtree(db, child.id)
-
-    # Check whether we can restore a previously soft-deleted subtree.
-    soft_children = [
-        c for c in node_repo.get_children(
-            db, question_node_id, include_soft_deleted=True
-        )
-        if c.soft_deleted and c.template_id == db_template_id
-    ]
-
-    if soft_children:
-        for child in soft_children:
-            node_repo.restore_subtree(db, child.id)
-    else:
-        # Instantiate the template fresh.
-        raw = template_repo.get_template_raw(db, db_template_id)
-        if raw is None:
-            raise ValueError(f"Template '{db_template_id}' not found in DB.")
-        template = load_template_from_db_row(raw)
-
-        for i, tnode in enumerate(_sort_tnodes(template.nodes)):
-            _instantiate_node(
-                db, question_node.project_id, tnode,
-                parent_id=question_node_id, position=i,
-                template_id=db_template_id,
-            )
-
-    node_repo.set_answer(db, question_node_id, db_template_id)
 
 
 def answer_question(

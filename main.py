@@ -27,6 +27,12 @@ _BUNDLED_TEMPLATES = [
     Path("templates/android-mobile.yaml"),
     Path("templates/thick-client.yaml"),
     Path("templates/api-testing.yaml"),
+    Path("templates/internal-network.yaml"),
+    Path("templates/domain-controller.yaml"),
+    Path("templates/host.yaml"),
+    Path("templates/database.yaml"),
+    Path("templates/network-service.yaml"),
+    Path("templates/ios-mobile.yaml"),
 ]
 
 

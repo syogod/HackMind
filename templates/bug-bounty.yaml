@@ -371,7 +371,7 @@ nodes:
           - Web application → Web Application Testing template
           - REST / GraphQL API → API Security Testing template
           - Android app → Android Mobile App Testing template
-          - iOS app → iOS Mobile App Testing template (if available)
+          - iOS app → iOS Mobile App Testing template
           - Thick client → Thick Client Testing template
 
           Track which assets you've added so nothing gets missed.

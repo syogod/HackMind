@@ -7,10 +7,12 @@ caller can persist it and call instantiate_project.
 """
 
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QHBoxLayout,
     QLineEdit,
     QMessageBox,
     QVBoxLayout,
@@ -19,6 +21,7 @@ from PyQt6.QtWidgets import (
 from hackmind.db import template_repo
 from hackmind.db.database import Database
 from hackmind.models.types import Project
+from hackmind.ui.version_utils import group_by_name, latest_per_name
 
 
 class NewProjectDialog(QDialog):
@@ -37,12 +40,19 @@ class NewProjectDialog(QDialog):
         self._target.setPlaceholderText("e.g., acme.com")
 
         self._engagement_combo = QComboBox()
-        self._populate_engagement_combo()
+        self._all_versions_chk = QCheckBox("All versions")
+        self._all_versions_chk.toggled.connect(lambda: self._refresh_engagement_combo())
+        self._refresh_engagement_combo()
+
+        engagement_row = QHBoxLayout()
+        engagement_row.setContentsMargins(0, 0, 0, 0)
+        engagement_row.addWidget(self._engagement_combo, stretch=1)
+        engagement_row.addWidget(self._all_versions_chk)
 
         form = QFormLayout()
         form.addRow("Project Name:", self._name)
         form.addRow("Target:", self._target)
-        form.addRow("Engagement Type:", self._engagement_combo)
+        form.addRow("Engagement Type:", engagement_row)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -54,12 +64,33 @@ class NewProjectDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(buttons)
 
-    def _populate_engagement_combo(self) -> None:
+    def _refresh_engagement_combo(self) -> None:
+        previous_id = self._engagement_combo.currentData()
+        self._engagement_combo.clear()
         self._engagement_combo.addItem("— no template —", "")
-        templates = template_repo.list_templates(self._db)
-        for t in templates:
-            if t.get("tier") == "engagement":
+
+        all_templates = template_repo.list_templates(self._db)
+        templates = [t for t in all_templates if t.get("tier") == "engagement"]
+
+        if self._all_versions_chk.isChecked():
+            first_group = True
+            for name, versions in group_by_name(templates).items():
+                if not first_group:
+                    self._engagement_combo.insertSeparator(self._engagement_combo.count())
+                first_group = False
+                for i, t in enumerate(versions):
+                    label = f"{t['name']} v{t['version']}"
+                    if i > 0:
+                        label += "  (older)"
+                    self._engagement_combo.addItem(label, t["id"])
+        else:
+            for t in latest_per_name(templates):
                 self._engagement_combo.addItem(f"{t['name']} v{t['version']}", t["id"])
+
+        if previous_id:
+            idx = self._engagement_combo.findData(previous_id)
+            if idx >= 0:
+                self._engagement_combo.setCurrentIndex(idx)
 
     def _accept(self) -> None:
         name = self._name.text().strip()

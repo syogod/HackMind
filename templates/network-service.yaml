@@ -1,0 +1,218 @@
+name: "Network Service"
+version: "1.0.0"
+author: "HackMind"
+tier: asset
+description: >
+  Methodology for a single network service exposed by a host (FTP, SSH, Telnet, RDP,
+  VNC, SNMP, NFS, rsync, LDAP, mail, ...). Start with exposure and authentication,
+  then pick the service branch. Use one of these per interesting port found during
+  discovery; web/database/AD services have their own dedicated templates.
+
+nodes:
+  - id: ns_overview
+    type: info
+    title: "Network Service — orientation"
+    content: |
+      Point this asset at a specific service/port. Record the exact product and
+      version (nmap -sV), whether it should be reachable from this segment, and
+      whether transport is encrypted. Then select the service below.
+
+      For richer surfaces, use the dedicated template instead: web apps -> Web
+      Application, REST/GraphQL -> API Security, databases -> Database, Active
+      Directory -> Domain Controller.
+
+  - id: ns_exposure
+    type: checklist
+    title: "Exposure, banner, and authentication"
+    content: |
+      - Fingerprint exact product + version: nmap -sV --version-intensity 9 -p <port> <IP>
+      - Grab the banner; search NVD / exploit-db / searchsploit for that version
+      - Is the service encrypted in transit, or are credentials/data in cleartext?
+      - Try default / blank / vendor credentials, then any harvested credentials
+      - Run service-specific nuclei templates: nuclei -t network/ -u <IP>:<port>
+      - Brute-force only if in scope and lockout-safe (note the policy first)
+
+  - id: q_service
+    type: question
+    title: "Which service is this?"
+    options:
+      - label: "FTP / FTPS"
+        key: "ftp"
+        children:
+          - id: ns_ftp
+            type: checklist
+            title: "FTP / FTPS checks"
+            content: |
+              - Anonymous login: ftp <IP> -> user "anonymous", any email as password
+                Check both read and write access
+              - Version CVEs: vsftpd 2.3.4 backdoor (CVE-2011-2523), ProFTPD mod_copy
+                (CVE-2015-3306 SITE CPFR/CPTO), ProFTPD 1.3.5, Pure-FTPd
+              - Brute-force (in scope, lockout-aware): hydra -L users -P pass ftp://<IP>
+              - Cleartext FTP exposes credentials to sniffing — finding in itself
+              - FTP bounce scan via PORT: nmap -b <user>:<pass>@<IP>
+              - Writable dir mapped to a web root -> upload a webshell; confirm it executes
+              - FTPS: check TLS config (testssl.sh <IP>:21) and whether TLS is enforced
+
+      - label: "SSH"
+        key: "ssh"
+        children:
+          - id: ns_ssh
+            type: checklist
+            title: "SSH checks"
+            content: |
+              - Banner/version -> CVEs: libssh auth bypass (CVE-2018-10933), regreSSHion
+                (CVE-2024-6387), Terrapin downgrade (CVE-2023-48795)
+              - Offered auth methods: ssh -v <IP> (is password auth allowed?)
+              - Algorithm/cipher audit: ssh-audit <IP>
+              - User enumeration on old OpenSSH (CVE-2018-15473)
+              - Brute / spray (in scope, watch fail2ban): hydra -L users -P pass ssh://<IP>
+              - Test discovered private keys; check agent forwarding and authorized_keys
+              - Restricted shell (rbash) escape; is TCP/port forwarding allowed (pivot)?
+
+      - label: "Telnet"
+        key: "telnet"
+        children:
+          - id: ns_telnet
+            type: checklist
+            title: "Telnet checks"
+            content: |
+              - Cleartext protocol — credentials are sniffable (report this regardless)
+              - Banner often identifies network gear / IoT / legacy systems
+              - Default credentials (admin/admin, root/root, vendor defaults)
+              - Brute-force (in scope): hydra telnet://<IP>
+              - Recommend replacement with SSH
+
+      - label: "RDP"
+        key: "rdp"
+        children:
+          - id: ns_rdp
+            type: checklist
+            title: "RDP checks"
+            content: |
+              - NLA enabled? nmap --script rdp-ntlm-info -p3389 <IP> (also leaks hostname/domain)
+              - BlueKeep (CVE-2019-0708) on Win7/2008; DejaBlue on newer
+              - Cred brute / spray (CAUTION: account lockout): xfreerdp /u /p, crowbar, hydra rdp
+              - Pass-the-Hash: xfreerdp /u:<user> /pth:<NTLM> (restrictedadmin)
+              - No-NLA MITM (Seth) for credential capture
+              - Note exposure of RDP directly to untrusted networks
+
+      - label: "VNC"
+        key: "vnc"
+        children:
+          - id: ns_vnc
+            type: checklist
+            title: "VNC checks"
+            content: |
+              - Unauthenticated access: vncviewer <IP>
+              - Weak/8-char password limit; brute: hydra vnc://<IP> / msf vnc_login
+              - Auth-bypass CVEs (RealVNC CVE-2006-2369, UltraVNC, TightVNC)
+              - Often unencrypted -> sniffable session
+
+      - label: "SNMP"
+        key: "snmp"
+        children:
+          - id: ns_snmp
+            type: checklist
+            title: "SNMP checks"
+            content: |
+              - Community brute: onesixtyone -c communities.txt <IP>;
+                defaults public / private / cisco / manager
+              - Walk: snmpwalk -v2c -c public <IP>  /  snmp-check <IP> -c public
+              - Loot: system info, running processes, listening ports, ARP/routing tables,
+                installed software, local users (Windows hrSWInstalledName / LanMan)
+              - Write access (private): grab/modify Cisco config (copy running-config via TFTP)
+              - SNMPv1/v2c are cleartext (finding); for v3 attempt user enumeration
+
+      - label: "NFS"
+        key: "nfs"
+        children:
+          - id: ns_nfs
+            type: checklist
+            title: "NFS checks"
+            content: |
+              - List exports: showmount -e <IP>  (nmap --script nfs-showmount)
+              - Mount: mount -t nfs <IP>:/export /mnt -o nolock
+              - World-readable/writable exports -> read sensitive files
+              - no_root_squash: write a SUID-root binary to the share, execute on a host you
+                control for local root (pairs with the Host asset)
+              - UID spoofing: locally create a user with a matching UID to access files (no auth)
+
+      - label: "rsync"
+        key: "rsync"
+        children:
+          - id: ns_rsync
+            type: checklist
+            title: "rsync checks"
+            content: |
+              - List modules: rsync rsync://<IP>:873/
+              - Anonymous read: rsync -av rsync://<IP>:873/<module> ./loot
+              - Writable module -> push files (webshell to a web root, key to authorized_keys)
+              - Check for exposed backups / source / config in modules
+
+      - label: "LDAP / LDAPS"
+        key: "ldap"
+        children:
+          - id: ns_ldap
+            type: checklist
+            title: "LDAP / LDAPS checks"
+            content: |
+              - Anonymous bind: ldapsearch -x -H ldap://<IP> -s base namingcontexts
+                then -b "<base DN>" to dump objects if anon read is allowed
+              - Enumerate users/groups/attributes; look for passwords in description/userPassword
+              - If this is Active Directory, use the Domain Controller asset instead
+              - Credentialed queries with harvested creds; check LDAPS cert and StartTLS
+              - Cleartext simple bind is sniffable
+
+      - label: "Mail (SMTP / IMAP / POP3 / Exchange)"
+        key: "mail"
+        children:
+          - id: ns_mail_smtp
+            type: checklist
+            title: "SMTP checks"
+            content: |
+              - Banner/version -> CVEs (Exim, Postfix, Sendmail)
+              - Open relay test: swaks --to ext@evil.com --from x@target.com --server <IP>
+                (or manual MAIL FROM / RCPT TO to an external domain)
+              - User enumeration: smtp-user-enum -M VRFY -U users.txt -t <IP>
+                (also try EXPN and RCPT TO)
+              - STARTTLS offered? Cleartext AUTH is sniffable; brute AUTH LOGIN if in scope
+
+          - id: ns_mail_imap_pop
+            type: checklist
+            title: "IMAP / POP3 checks"
+            content: |
+              - Cleartext (143/110) vs TLS (993/995) — flag plaintext credentials
+              - Brute discovered/known users (in scope, lockout-aware)
+              - Read mailboxes with any harvested credentials
+
+          - id: ns_mail_spoof
+            type: checklist
+            title: "Email spoofing feasibility"
+            content: |
+              - Check SPF / DMARC / DKIM: dig TXT <domain>, dig TXT _dmarc.<domain>
+              - Missing/weak (p=none) DMARC -> external spoofing into the org (phishing)
+              - Internal relay that doesn't authenticate -> spoof internal senders
+
+          - id: ns_mail_exchange
+            type: checklist
+            title: "Exchange / OWA (if present)"
+            content: |
+              - OWA /owa, ECP /ecp; autodiscover for domain/user enumeration
+              - Password spray against OWA/EWS (CAUTION: lockout) — MailSniper / o365spray
+              - ProxyLogon (CVE-2021-26855) / ProxyShell (CVE-2021-34473/34523/31207) on
+                unpatched on-prem Exchange -> pre-auth RCE
+              - NTLM over HTTP endpoints (EWS/Autodiscover) -> relay
+              - For deep web testing of OWA, also add a Web Application asset
+
+      - label: "Other / Unknown"
+        key: "other_service"
+        children:
+          - id: ns_other
+            type: checklist
+            title: "Generic service checks"
+            content: |
+              - Fingerprint exact product + version (nmap -sV, banner, probes)
+              - Search NVD / exploit-db / searchsploit for that version
+              - Default / weak credentials; unauthenticated access; cleartext transport
+              - nuclei -t network/ ; relevant Metasploit auxiliary/scanner modules
+              - Management UIs on web ports (Adminer, Jenkins, Grafana, etc.) -> Web App asset

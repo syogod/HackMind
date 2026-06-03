@@ -24,48 +24,10 @@ from PyQt6.QtWidgets import (
 
 
 from hackmind.db import node_repo, template_repo
-
-
-# ---------------------------------------------------------------------------
-# Version helpers
-# ---------------------------------------------------------------------------
-
-def _parse_version(v: str) -> tuple:
-    """
-    Parse a version string into a tuple of ints for ordering comparisons.
-    Non-numeric segments are treated as 0. e.g. "1.2.3" → (1, 2, 3).
-    """
-    parts = []
-    for p in v.strip().split("."):
-        try:
-            parts.append(int(p))
-        except ValueError:
-            parts.append(0)
-    return tuple(parts)
-
-
-def _latest_per_name(templates: list[dict]) -> list[dict]:
-    """Return one entry per template name — the one with the highest version."""
-    best: dict[str, dict] = {}
-    for t in templates:
-        name = t["name"]
-        if name not in best or _parse_version(t["version"]) > _parse_version(best[name]["version"]):
-            best[name] = t
-    return sorted(best.values(), key=lambda t: t["name"].lower())
-
-
-def _group_by_name(templates: list[dict]) -> dict[str, list[dict]]:
-    """Group templates by name; within each group sort by version descending."""
-    groups: dict[str, list[dict]] = {}
-    for t in templates:
-        groups.setdefault(t["name"], []).append(t)
-    return {
-        name: sorted(versions, key=lambda t: _parse_version(t["version"]), reverse=True)
-        for name, versions in sorted(groups.items(), key=lambda kv: kv[0].lower())
-    }
 from hackmind.engine import tree_engine
 from hackmind.models.types import Node
 from hackmind.ui.app_state import AppState
+from hackmind.ui.version_utils import group_by_name, latest_per_name
 from hackmind.ui.widgets.note_editor import NoteEditor
 
 
@@ -154,7 +116,7 @@ class AssetPanel(QWidget):
 
         if self._all_versions_chk.isChecked():
             first_group = True
-            for name, versions in _group_by_name(templates).items():
+            for name, versions in group_by_name(templates).items():
                 if not first_group:
                     self._template_combo.insertSeparator(self._template_combo.count())
                 first_group = False
@@ -164,7 +126,7 @@ class AssetPanel(QWidget):
                         label += "  (older)"
                     self._template_combo.addItem(label, t["id"])
         else:
-            for t in _latest_per_name(templates):
+            for t in latest_per_name(templates):
                 self._template_combo.addItem(f"{t['name']} v{t['version']}", t["id"])
 
         if previous_id:

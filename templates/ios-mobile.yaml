@@ -1,0 +1,337 @@
+name: "iOS Mobile App Testing"
+version: "1.0.0"
+author: "HackMind"
+tier: asset
+description: >
+  iOS application penetration testing methodology covering static analysis of the
+  IPA and Mach-O binary, network traffic and ATS, on-device data storage (Keychain,
+  NSUserDefaults, the app sandbox), authentication, URL-scheme / universal-link IPC,
+  WebViews, and anti-tampering (jailbreak detection, anti-debugging).
+
+nodes:
+  # -------------------------------------------------------------------------
+  # Static Analysis
+  # -------------------------------------------------------------------------
+  - id: ios_static
+    type: info
+    title: "Static Analysis"
+    content: "Analyse the IPA and Mach-O binary without running the app."
+    children:
+      - id: ios_static_extract
+        type: checklist
+        title: "Obtain and decrypt the IPA"
+        content: |
+          App Store binaries are FairPlay-encrypted — decrypt from a jailbroken device:
+          - frida-ios-dump / bagbak / r2flutch to pull a decrypted IPA
+          - unzip target.ipa -> Payload/App.app
+          - class-dump / class-dump-swift the binary for headers (Obj-C/Swift class & method names)
+          - Tools overview: MobSF (static), Hopper/Ghidra/radare2 for deeper RE
+
+      - id: ios_static_plist
+        type: checklist
+        title: "Review Info.plist and entitlements"
+        content: |
+          Inspect Payload/App.app/Info.plist (plutil -p / convert with plutil -convert xml1):
+          - CFBundleURLTypes -> custom URL schemes (IPC attack surface)
+          - NSAppTransportSecurity -> NSAllowsArbitraryLoads / per-domain exceptions
+          - UIFileSharingEnabled / LSSupportsOpeningDocumentsInPlace (iTunes file sharing)
+          - Permission strings (NSCameraUsageDescription, location, contacts, etc.)
+          - UIBackgroundModes
+          - Entitlements (codesign -d --entitlements :- App.app): keychain access groups,
+            associated-domains (universal links), app groups (shared container)
+
+      - id: ios_static_binary
+        type: checklist
+        title: "Assess Mach-O binary protections"
+        content: |
+          - PIE/ASLR: otool -hv App | grep PIE
+          - Stack canaries: otool -Iv App | grep stack_chk
+          - ARC (memory safety): otool -Iv App | grep objc_release
+          - Encryption flag: otool -l App | grep -A4 LC_ENCRYPTION_INFO (cryptid 1 = still encrypted)
+          - Architectures (lipo -info), Swift vs Obj-C, embedded frameworks in Frameworks/
+
+      - id: ios_static_secrets
+        type: checklist
+        title: "Search for hardcoded secrets and SDKs"
+        content: |
+          - strings -a App | grep -iE "api[_-]?key|secret|token|password|https?://"
+          - Embedded config plists, .cer/.pem files, GoogleService-Info.plist (Firebase)
+          - Third-party SDKs in Frameworks/ — cross-reference versions against CVEs
+          - Hardcoded backend URLs, staging/debug endpoints, feature flags
+
+  # -------------------------------------------------------------------------
+  # Network Traffic
+  # -------------------------------------------------------------------------
+  - id: ios_network
+    type: info
+    title: "Network Traffic Analysis"
+    content: "Intercept and inspect all network communication."
+    children:
+      - id: ios_net_proxy
+        type: checklist
+        title: "Configure interception proxy"
+        content: |
+          - Set the device Wi-Fi HTTP proxy to Burp/mitmproxy
+          - Install the Burp CA and TRUST it: Settings > General > About > Certificate Trust Settings
+            (installing alone is not enough — the toggle must be enabled)
+          - Confirm App Transport Security isn't blocking the proxy CA (see ATS node)
+
+      - id: q_ios_pinning
+        type: question
+        title: "Does the app implement certificate pinning?"
+        options:
+          - label: "Yes — needs bypassing"
+            key: "yes"
+            children:
+              - id: ios_pinning_bypass
+                type: checklist
+                title: "Bypass certificate pinning"
+                content: |
+                  - objection -g <bundleid> explore -> ios sslpinning disable
+                  - Frida: SSL Kill Switch 2 concept ported, or frida-codeshare ios pinning scripts
+                  - Hook common stacks: NSURLSession delegate (didReceiveChallenge),
+                    AFNetworking/Alamofire ServerTrustPolicy, TrustKit
+                  - If statically linked / custom: identify the check via class-dump and hook it
+                  - Last resort: patch the binary check and re-sign
+
+          - label: "No"
+            key: "no"
+            children: []
+
+      - id: ios_net_ats
+        type: checklist
+        title: "Review App Transport Security (ATS)"
+        content: |
+          - NSAllowsArbitraryLoads = true defeats ATS app-wide (allows cleartext HTTP)
+          - Per-domain NSExceptionAllowsInsecureHTTPLoads exceptions
+          - NSExceptionMinimumTLSVersion lowered below 1.2
+          - Watch the proxy for any http:// requests carrying sensitive data
+
+      - id: ios_net_sensitive
+        type: checklist
+        title: "Inspect traffic for sensitive data"
+        content: |
+          - Credentials / session tokens in URL parameters
+          - PII sent unnecessarily; tokens in custom headers
+          - Verbose server errors / stack traces
+          - Back-end API issues belong in a Web App / API asset — add one for the backend
+
+  # -------------------------------------------------------------------------
+  # Data Storage
+  # -------------------------------------------------------------------------
+  - id: ios_storage
+    type: info
+    title: "Data Storage"
+    content: "Check where and how the app stores sensitive data on-device."
+    children:
+      - id: ios_storage_keychain
+        type: checklist
+        title: "Review Keychain usage"
+        content: |
+          Secrets should live in the Keychain with a sensible accessibility class:
+          - Dump (jailbroken): objection -g <bundleid> explore -> ios keychain dump,
+            or keychain-dumper
+          - Check kSecAttrAccessible value:
+            AfterFirstUnlock / WhenUnlocked good; Always (deprecated) bad;
+            ...ThisDeviceOnly prevents backup/restore exfiltration
+          - Is sensitive data in the Keychain at all, or sitting in plist/NSUserDefaults instead?
+
+      - id: ios_storage_userdefaults
+        type: checklist
+        title: "Review NSUserDefaults and plists"
+        content: |
+          NSUserDefaults persists to a plaintext plist in Library/Preferences/:
+          - <bundleid>.plist — look for tokens, passwords, PII, flags
+          - Any other .plist in the sandbox written by the app
+          - plutil -p to read; nothing here should be sensitive
+
+      - id: ios_storage_files
+        type: checklist
+        title: "Review sandbox files and databases"
+        content: |
+          App sandbox: /var/mobile/Containers/Data/Application/<UUID>/
+          - Documents/, Library/, tmp/ — pull and inspect
+          - SQLite/Core Data .sqlite, Realm .realm, Firestore caches -> plaintext creds/PII?
+          - Is Data Protection applied (NSFileProtectionComplete) or written unprotected?
+          - Cached HTTP responses (Library/Caches), Cache.db
+
+      - id: ios_storage_snapshot
+        type: checklist
+        title: "Check backgrounding snapshot and pasteboard"
+        content: |
+          - iOS snapshots the UI on backgrounding to Library/Caches/Snapshots/ —
+            does it capture sensitive screens (no blur/placeholder applied)?
+          - General pasteboard (UIPasteboard.general): is sensitive data copied to a
+            globally-readable pasteboard? Test cross-app readability.
+
+      - id: ios_storage_logs
+        type: checklist
+        title: "Check device logs"
+        content: |
+          - Stream logs while using the app (idevicesyslog, Console.app, or socat on device)
+          - Look for NSLog of tokens/passwords/PII, stack traces, request bodies
+
+  # -------------------------------------------------------------------------
+  # Authentication & Session
+  # -------------------------------------------------------------------------
+  - id: q_ios_auth
+    type: question
+    title: "Does the app require user authentication?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: ios_auth_token_storage
+            type: checklist
+            title: "Check how auth tokens are stored"
+            content: |
+              - Token in Keychain with a sane accessibility class (not in NSUserDefaults/plist)?
+              - Does the token appear in logs or backgrounding snapshots?
+              - Is it protected at rest with Data Protection?
+
+          - id: ios_auth_biometric
+            type: question
+            title: "Does the app use Face ID / Touch ID?"
+            options:
+              - label: "Yes"
+                key: "yes"
+                children:
+                  - id: ios_auth_biometric_bypass
+                    type: checklist
+                    title: "Test biometric authentication bypass"
+                    content: |
+                      - Weak: LAContext.evaluatePolicy used only as a UI gate ->
+                        hook with objection (ios ui biometrics_bypass) / Frida to force success
+                      - Strong: secret released from the Keychain via
+                        SecAccessControl (kSecAccessControlBiometryCurrentSet) — cannot be
+                        bypassed by merely hooking the callback
+                      - Confirm which pattern is used and whether the protected action still
+                        succeeds when the callback is forced
+
+              - label: "No"
+                key: "no"
+                children: []
+
+          - id: ios_auth_logout
+            type: checklist
+            title: "Test logout and session invalidation"
+            content: |
+              - After logout, is the token removed from the Keychain/sandbox?
+              - Is the server-side session invalidated (replay the captured token)?
+              - Is re-auth required after backgrounding / device lock?
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # -------------------------------------------------------------------------
+  # IPC — URL schemes, universal links, extensions
+  # -------------------------------------------------------------------------
+  - id: ios_ipc
+    type: info
+    title: "IPC — URL Schemes & Universal Links"
+    content: "Test the app's inbound entry points for injection and auth bypass."
+    children:
+      - id: ios_ipc_urlschemes
+        type: checklist
+        title: "Test custom URL schemes"
+        content: |
+          - Enumerate schemes from CFBundleURLTypes (Info.plist)
+          - Trigger from Safari or: open the URL on-device, or
+            frida -> [UIApplication openURL:]
+          - Test: myapp://path?param=value for parameter injection, auth bypass,
+            actions performed without confirmation, redirect/XSS into a WebView
+          - Any caller can invoke a scheme — sensitive actions must not trust it blindly
+
+      - id: ios_ipc_universal_links
+        type: checklist
+        title: "Test universal links"
+        content: |
+          - Fetch https://<domain>/.well-known/apple-app-site-association (AASA)
+          - Check which paths route into the app and whether server-side validation matches
+          - Look for path patterns that grant authenticated actions without re-checks
+          - associated-domains entitlement scope
+
+      - id: ios_ipc_pasteboard_ext
+        type: checklist
+        title: "Test app extensions and shared containers"
+        content: |
+          - Share / today / keyboard extensions: do they handle untrusted input safely?
+          - App Groups shared container (group.<id>): sensitive data shared between
+            app and extensions readable by all members?
+          - Document handlers (LSSupportsOpeningDocumentsInPlace) parsing untrusted files
+
+  # -------------------------------------------------------------------------
+  # WebView
+  # -------------------------------------------------------------------------
+  - id: q_ios_webview
+    type: question
+    title: "Does the app use WebViews?"
+    options:
+      - label: "Yes"
+        key: "yes"
+        children:
+          - id: ios_webview_type
+            type: checklist
+            title: "Identify WebView type and config"
+            content: |
+              - UIWebView is deprecated and insecure — flag if present
+              - WKWebView: check allowsArbitraryLoads, file access, and whether it loads
+                attacker-influenceable URLs (from deep links / server)
+
+          - id: ios_webview_bridge
+            type: checklist
+            title: "Test JS bridges"
+            content: |
+              - WKScriptMessageHandler (window.webkit.messageHandlers.*) exposes native
+                functions to JS — can a malicious/injected page call them?
+              - evaluateJavaScript with user-controlled input
+              - JavaScriptCore JSContext exporting native objects to JS
+
+          - id: ios_webview_xss
+            type: checklist
+            title: "Test for XSS / local file access in WebView"
+            content: |
+              - Reflected input rendered in the WebView -> XSS, which can reach JS bridges
+              - loadFileURL / file:// access leaking sandbox files
+              - Test via deep links that load attacker-controlled content into the WebView
+
+      - label: "No"
+        key: "no"
+        children: []
+
+  # -------------------------------------------------------------------------
+  # Anti-Tampering Protections
+  # -------------------------------------------------------------------------
+  - id: ios_binary
+    type: info
+    title: "Anti-Tampering Protections"
+    content: "Assess and, where needed for testing, bypass runtime protections."
+    children:
+      - id: ios_jailbreak_detection
+        type: checklist
+        title: "Test jailbreak detection bypass"
+        content: |
+          If the app refuses to run on a jailbroken device:
+          - objection -g <bundleid> explore -> ios jailbreak disable
+          - Frida hooks on common checks: file existence (/Applications/Cydia.app,
+            /bin/bash, apt), fork(), URL scheme cydia://, sandbox write outside container
+          - Tweaks: Shadow / Liberty Lite to hide the jailbreak
+          - Note: weak detection (single check) vs layered/obfuscated detection
+
+      - id: ios_anti_debug
+        type: checklist
+        title: "Test anti-debugging"
+        content: |
+          - ptrace(PT_DENY_ATTACH) and sysctl checks to detect a debugger
+          - Bypass: hook ptrace/sysctl with Frida, or patch the call
+          - Check whether Frida/objection itself is detected (frida-detection libs)
+
+      - id: ios_obfuscation
+        type: checklist
+        title: "Assess code obfuscation"
+        content: |
+          - Are class/method names meaningful (Obj-C metadata) or obfuscated?
+          - Swift binaries are harder to introspect than Obj-C
+          - String encryption at rest; presence of commercial protectors (e.g. iXGuard)
+          - Document the level to set expectations for static-analysis depth
