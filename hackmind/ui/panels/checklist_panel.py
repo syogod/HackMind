@@ -5,7 +5,7 @@ Controls: status selector, "Is Finding" toggle, notes editor,
 and the attachment pane.
 """
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QLabel,
     QSizePolicy,
+    QSplitter,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
@@ -50,7 +51,7 @@ class ChecklistPanel(QWidget):
         self._title.setFont(font)
 
         self._guidance = QTextBrowser()
-        self._guidance.setMaximumHeight(120)
+        self._guidance.setMinimumHeight(60)
         self._guidance.setOpenExternalLinks(True)
 
         # Status row
@@ -80,14 +81,24 @@ class ChecklistPanel(QWidget):
         attachments_layout = QVBoxLayout(attachments_group)
         attachments_layout.addWidget(self._attachment_pane)
 
+        # Description / Notes / Attachments share the remaining space and are
+        # user-resizable by dragging the splitter handles between them.
+        self._splitter = QSplitter(Qt.Orientation.Vertical)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.addWidget(self._guidance)
+        self._splitter.addWidget(notes_group)
+        self._splitter.addWidget(attachments_group)
+        self._splitter.setStretchFactor(0, 2)
+        self._splitter.setStretchFactor(1, 3)
+        self._splitter.setStretchFactor(2, 2)
+        self._splitter.setSizes([200, 320, 180])
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         layout.addWidget(self._title)
-        layout.addWidget(self._guidance)
         layout.addLayout(form)
-        layout.addWidget(notes_group, stretch=2)
-        layout.addWidget(attachments_group, stretch=1)
+        layout.addWidget(self._splitter, stretch=1)
 
     def load(self, node: Node) -> None:
         self._loading = True
