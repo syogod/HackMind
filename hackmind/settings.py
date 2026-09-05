@@ -95,6 +95,7 @@ def set_base_font_size(px: int) -> None:
 
 KEY_CHECKLIST_GUIDANCE = "ui/checklist_guidance_expanded"
 KEY_RIGHT_SPLITTER = "ui/right_splitter_sizes"
+KEY_TREE_FILTER = "ui/tree_filter_mode"
 
 
 def get_flag(key: str, default: bool) -> bool:
@@ -108,6 +109,12 @@ def get_flag(key: str, default: bool) -> bool:
 def set_flag(key: str, value: bool) -> None:
     """Persist a boolean UI-state flag."""
     _qs().setValue(key, value)
+
+
+def get_flag_str(key: str, default: str) -> str:
+    """Read a string UI-state value (e.g. the tree quick-filter mode)."""
+    raw = _qs().value(key, default)
+    return str(raw) if raw is not None else default
 
 
 def get_sizes(key: str) -> list[int] | None:

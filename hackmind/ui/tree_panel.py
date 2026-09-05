@@ -14,7 +14,7 @@ from __future__ import annotations
 from PyQt6.QtCore import QAbstractItemModel, QModelIndex, QPoint, QSortFilterProxyModel, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFont
 from PyQt6.QtWidgets import (
-    QCheckBox,
+    QButtonGroup,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -60,7 +60,8 @@ _FINDING_SUFFIX = "  ⚑"
 # ---------------------------------------------------------------------------
 
 class _TreeItem:
-    __slots__ = ("node", "parent", "children", "derived_status", "is_answered", "has_fetched_children")
+    __slots__ = ("node", "parent", "children", "derived_status", "is_answered",
+                 "has_fetched_children", "done_count", "total_count")
 
     def __init__(self, node: Node, parent: "_TreeItem | None" = None) -> None:
         self.node = node
@@ -69,6 +70,8 @@ class _TreeItem:
         self.derived_status: NodeStatus = node.status
         self.is_answered: bool = False
         self.has_fetched_children: bool = False
+        self.done_count: int = 0     # checklist descendants marked done
+        self.total_count: int = 0    # checklist descendants (incl. self)
 
 
 # High-contrast severity colors
@@ -125,6 +128,14 @@ class _QtTreeModel(QAbstractItemModel):
                 item.has_fetched_children = True
                 self._item_map[n.id] = item
                 item.children = _build_items(n.id, item)
+                # Aggregate progress: self (if checklist) + all descendants
+                if n.type == NodeType.CHECKLIST:
+                    item.total_count += 1
+                    if item.derived_status.value in _DONE_STATUSES:
+                        item.done_count += 1
+                for child in item.children:
+                    item.total_count += child.total_count
+                    item.done_count += child.done_count
                 items.append(item)
             return items
 
@@ -201,7 +212,10 @@ class _QtTreeModel(QAbstractItemModel):
         if role == Qt.ItemDataRole.DisplayRole:
             prefix = _TYPE_PREFIX.get(item.node.type, "  ")
             suffix = _FINDING_SUFFIX if item.node.is_finding else ""
-            return f"{prefix}{item.node.title}{suffix}"
+            badge = ""
+            if item.children and item.total_count:
+                badge = f"   [{item.done_count}/{item.total_count}]"
+            return f"{prefix}{item.node.title}{badge}{suffix}"
 
         if role == Qt.ItemDataRole.ForegroundRole:
             # Severity Highlighting for Vulnerable Nodes
@@ -256,21 +270,21 @@ _DONE_STATUSES = frozenset(("complete", "vulnerable", "not_applicable"))
 
 class _ScopeFilterProxy(QSortFilterProxyModel):
     """
-    Extends the standard text-search proxy with two extra filters:
+    Extends the standard text-search proxy with extra filters:
 
     OOS-tag filtering — a row is hidden when its node's scope_tags
     intersect the active out-of-scope set.
 
-    Hide-done filtering — checklist nodes whose status is complete,
-    vulnerable, or not_applicable are hidden.  INFO, ASSET, and QUESTION
-    nodes are never hidden by this filter (they are containers or branch
-    points; hiding them would also hide any incomplete work underneath).
+    Quick-filter mode — one of: all | incomplete | findings | vulnerable |
+    in_progress.  With recursive filtering enabled, ancestors of matching
+    rows stay visible so the tree keeps its structure.
     """
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._oos_tags: frozenset[str] = frozenset()
         self._hide_done: bool = False
+        self._filter_mode: str = "all"
 
     def set_oos_tags(self, tags: set[str]) -> None:
         self._oos_tags = frozenset(tags)
@@ -278,6 +292,10 @@ class _ScopeFilterProxy(QSortFilterProxyModel):
 
     def set_hide_done(self, hide: bool) -> None:
         self._hide_done = hide
+        self.invalidateFilter()
+
+    def set_filter_mode(self, mode: str) -> None:
+        self._filter_mode = mode
         self.invalidateFilter()
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
@@ -289,9 +307,21 @@ class _ScopeFilterProxy(QSortFilterProxyModel):
             # OOS filter — unconditionally hides tagged nodes.
             if self._oos_tags and self._oos_tags.intersection(node.scope_tags):
                 return False
-            # Hide-done filter — only applies to checklist nodes.
-            if self._hide_done and node.type == NodeType.CHECKLIST:
-                if node.status.value in _DONE_STATUSES:
+            # Legacy hide-done / "incomplete" mode — only checklist nodes.
+            if (self._hide_done or self._filter_mode == "incomplete") \
+                    and node.type == NodeType.CHECKLIST \
+                    and node.status.value in _DONE_STATUSES:
+                return False
+            if self._filter_mode == "findings":
+                if not (node.is_finding or node.status == NodeStatus.VULNERABLE):
+                    return False
+            elif self._filter_mode == "vulnerable":
+                if not (node.type == NodeType.CHECKLIST
+                        and node.status == NodeStatus.VULNERABLE):
+                    return False
+            elif self._filter_mode == "in_progress":
+                if not (node.type == NodeType.CHECKLIST
+                        and node.status == NodeStatus.IN_PROGRESS):
                     return False
 
         return super().filterAcceptsRow(source_row, source_parent)
@@ -324,9 +354,38 @@ class TreePanel(QWidget):
         self._scope_btn.setEnabled(False)
         self._scope_btn.clicked.connect(self._on_scope_clicked)
 
-        self._hide_done_btn = QCheckBox("Hide Completed")
-        self._hide_done_btn.setEnabled(False)
-        self._hide_done_btn.toggled.connect(self._on_hide_done_toggled)
+        # Quick-filter chips (exclusive selection)
+        self._filter_group = QButtonGroup(self)
+        self._filter_group.setExclusive(True)
+        self._filter_buttons: list[QPushButton] = []
+        self._filter_buttons_by_mode: dict[str, QPushButton] = {}
+        for mode, label in (
+            ("all",         "All"),
+            ("incomplete",  "Incomplete"),
+            ("findings",    "Findings"),
+            ("vulnerable",  "Vuln"),
+            ("in_progress", "In Prog"),
+        ):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setEnabled(False)
+            btn.setProperty("class", "chip")
+            btn.setFixedHeight(22)
+            btn.setToolTip(f"Show only: {label}")
+            btn.clicked.connect(lambda _c, m=mode: self._on_filter_mode_clicked(m))
+            self._filter_group.addButton(btn)
+            self._filter_buttons.append(btn)
+            self._filter_buttons_by_mode[mode] = btn
+        self._filter_buttons_by_mode["all"].setChecked(True)
+
+        # Restore the last-used quick-filter mode.
+        from hackmind import settings as _settings
+        saved_mode = _settings.get_flag_str(
+            _settings.KEY_TREE_FILTER, "all"
+        )
+        if saved_mode in self._filter_buttons_by_mode:
+            self._filter_buttons_by_mode[saved_mode].setChecked(True)
+            self._proxy.set_filter_mode(saved_mode)
 
         search_row = QHBoxLayout()
         search_row.setContentsMargins(0, 0, 0, 0)
@@ -337,7 +396,8 @@ class TreePanel(QWidget):
         filter_row.setContentsMargins(0, 0, 0, 0)
         filter_row.setSpacing(4)
         filter_row.addWidget(self._scope_btn)
-        filter_row.addWidget(self._hide_done_btn)
+        for btn in self._filter_buttons:
+            filter_row.addWidget(btn)
         filter_row.addStretch()
 
         self._tree = QTreeView()
@@ -353,8 +413,11 @@ class TreePanel(QWidget):
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setTextVisible(False)
-        self._progress_bar.setFixedHeight(6)
+        self._progress_bar.setFixedHeight(14)
         self._progress_bar.setVisible(False)
+        self._progress_bar.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._progress_bar.setToolTip("Click to jump to the next incomplete check")
+        self._progress_bar.mousePressEvent = self._on_progress_clicked  # type: ignore[method-assign]
 
         self._progress_label = QLabel()
         self._progress_label.setVisible(False)
@@ -379,7 +442,7 @@ class TreePanel(QWidget):
         oos = scope_repo.get_oos_tags(db, project_id)
         self._proxy.set_oos_tags(oos)
         self._scope_btn.setEnabled(True)
-        self._hide_done_btn.setEnabled(True)
+        self._set_filter_chips_enabled(True)
         self._update_scope_button(oos)
         self._update_progress(db, project_id, oos)
         self._tree.expandAll()
@@ -408,9 +471,9 @@ class TreePanel(QWidget):
         self._model.load_project(db, project_id, statuses, answers)
         oos = scope_repo.get_oos_tags(db, project_id)
         self._proxy.set_oos_tags(oos)
-        self._proxy.set_hide_done(self._hide_done_btn.isChecked())
+        self._proxy.set_filter_mode(self._current_filter_mode())
         self._scope_btn.setEnabled(True)
-        self._hide_done_btn.setEnabled(True)
+        self._set_filter_chips_enabled(True)
         self._update_scope_button(oos)
         self._update_progress(db, project_id, oos)
         
@@ -429,8 +492,8 @@ class TreePanel(QWidget):
         self._proxy.set_oos_tags(set())
         self._proxy.set_hide_done(False)
         self._scope_btn.setEnabled(False)
-        self._hide_done_btn.setEnabled(False)
-        self._hide_done_btn.setChecked(False)
+        self._set_filter_chips_enabled(False)
+        self._set_filter_mode("all")
         self._progress_bar.setVisible(False)
         self._progress_label.setVisible(False)
         self._model.clear()
@@ -479,8 +542,46 @@ class TreePanel(QWidget):
         if not menu.isEmpty():
             menu.exec(self._tree.viewport().mapToGlobal(pos))
 
-    def _on_hide_done_toggled(self, checked: bool) -> None:
-        self._proxy.set_hide_done(checked)
+    # ── Quick-filter chips ────────────────────────────────────────────────────
+    def _current_filter_mode(self) -> str:
+        for mode, btn in self._filter_buttons_by_mode.items():
+            if btn.isChecked():
+                return mode
+        return "all"
+
+    def _set_filter_mode(self, mode: str) -> None:
+        for m, btn in self._filter_buttons_by_mode.items():
+            btn.setChecked(m == mode)
+        self._proxy.set_filter_mode(mode)
+
+    def _on_filter_mode_clicked(self, mode: str) -> None:
+        from hackmind import settings as _settings
+        self._proxy.set_filter_mode(mode)
+        _settings.set_flag(_settings.KEY_TREE_FILTER, mode)
+
+    def _set_filter_chips_enabled(self, enabled: bool) -> None:
+        for btn in self._filter_buttons:
+            btn.setEnabled(enabled)
+
+    # ── Progress-bar jump ────────────────────────────────────────────────────
+    def _on_progress_clicked(self, _event) -> None:
+        next_id = self._find_next_incomplete()
+        if next_id:
+            self.select_node(next_id)
+            self.node_selected.emit(next_id)
+
+    def _find_next_incomplete(self) -> str | None:
+        """DFS for the first checklist descendant not in a done state."""
+        def _walk(items: list[_TreeItem]) -> str | None:
+            for item in items:
+                if item.node.type == NodeType.CHECKLIST \
+                        and item.derived_status.value not in _DONE_STATUSES:
+                    return item.node.id
+                found = _walk(item.children)
+                if found:
+                    return found
+            return None
+        return _walk(self._model._roots)
 
     def _on_scope_clicked(self) -> None:
         if self._db is None or self._project_id is None:
