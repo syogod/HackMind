@@ -43,22 +43,27 @@ class ExportWorker(QThread):
     finished = pyqtSignal(str, str) # file_path, result_type
     error = pyqtSignal(str)
 
-    def __init__(self, db_path: Path, project_id: str, file_path: str, export_type: str, **kwargs) -> None:
+    def __init__(self, db_path: Path, project_id: str, file_path: str, export_type: str,
+                 password: str | None = None, **kwargs) -> None:
         super().__init__()
         self.db_path = Path(db_path)
         self.project_id = project_id
         self.file_path = file_path
         self.export_type = export_type
+        self.password = password
         self.kwargs = kwargs
 
     def run(self) -> None:
         try:
-            db = Database.open_at(self.db_path)
+            db = Database.open_at(self.db_path, password=self.password)
             try:
                 if self.export_type == "markdown":
                     from hackmind.engine.report_exporter import generate_markdown_report
                     self.progress.emit(30)
-                    report_md = generate_markdown_report(db, self.project_id)
+                    report_md = generate_markdown_report(
+                        db, self.project_id,
+                        export_dir=Path(self.file_path).parent,
+                    )
                     self.progress.emit(70)
                     Path(self.file_path).write_text(report_md, encoding="utf-8")
                     self.progress.emit(100)
@@ -120,9 +125,10 @@ _PAGE_ASSET     = 3
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, password: str | None = None) -> None:
         super().__init__()
         self._state = AppState(db=db)
+        self._db_password = password  # needed by ExportWorker to reopen the DB
         self._theme_group = None  # set by _build_menu(); kept for _sync_theme_menu()
         self.setWindowTitle("HackMind")
         self.resize(1280, 800)
@@ -316,7 +322,10 @@ class MainWindow(QMainWindow):
         self._progress_bar.setVisible(True)
         self._status_bar.showMessage("Exporting report...")
 
-        self._export_worker = ExportWorker(self._state.db._path, self._state.project.id, save_file, "markdown")
+        self._export_worker = ExportWorker(
+            self._state.db._path, self._state.project.id, save_file, "markdown",
+            password=self._db_password,
+        )
         self._export_worker.progress.connect(self._progress_bar.setValue)
         self._export_worker.finished.connect(self._on_export_finished)
         self._export_worker.error.connect(self._on_export_error)
@@ -535,6 +544,7 @@ class MainWindow(QMainWindow):
 
         self._export_worker = ExportWorker(
             self._state.db._path, self._state.project.id, save_file, "template",
+            password=self._db_password,
             asset_node_id=asset_node_id,
             name=dialog.result_name,
             version=dialog.result_version,

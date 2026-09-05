@@ -92,7 +92,7 @@ def main() -> None:
     _ensure_bundled_templates(db)
     tree_engine.resync_scope_tags(db)
 
-    window = MainWindow(db)
+    window = MainWindow(db, password=password)
     window.show()
 
     exit_code = app.exec()

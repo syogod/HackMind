@@ -2,21 +2,48 @@
 Evidence-to-report exporter for HackMind.
 
 Generates a Markdown report summarizing findings, notes, and attachment references.
+If *export_dir* is provided, referenced attachment files are copied into a
+".attachments/" folder next to the report so the links stay valid wherever
+the report is saved or shared.
 """
 
+import shutil
 from datetime import datetime
+from pathlib import Path
 
 from hackmind.db import node_repo, project_repo, attachment_repo
 from hackmind.db.database import Database
 from hackmind.models.types import NodeStatus
 
 
-def generate_markdown_report(db: Database, project_id: str) -> str:
+def _copy_attachment(db: Database, att, export_dir: Path) -> str | None:
+    """
+    Copy an attachment file into <export_dir>/.attachments/<relative_path>.
+    Return the relative link path, or None if the source file is missing.
+    """
+    src = db.attachments_dir / att.relative_path
+    if not src.is_file():
+        return None
+    dest = export_dir / ".attachments" / att.relative_path
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.exists() or dest.stat().st_size != src.stat().st_size:
+        shutil.copy2(src, dest)
+    return f".attachments/{att.relative_path}"
+
+
+def generate_markdown_report(
+    db: Database,
+    project_id: str,
+    export_dir: Path | None = None,
+) -> str:
     """
     Generate a full Markdown report for the given project.
-    
+
     1. Executive Summary: Count findings by severity.
     2. Vulnerability Details: Detailed notes and attachments for each finding.
+
+    If *export_dir* is given, attachment files are copied to
+    <export_dir>/.attachments/ and the report links to them relatively.
     """
     project = project_repo.get_project(db, project_id)
     if not project:
@@ -90,12 +117,11 @@ def generate_markdown_report(db: Database, project_id: str) -> str:
             if attachments:
                 report.append("\n#### Attachments")
                 for att in attachments:
-                    # Provide a local link if possible, or just the filename
-                    # Since it's a markdown report, we link to the relative path on disk
-                    # relative_path in DB is 'project_id/unique_name'
-                    # The report is usually exported elsewhere, so we might want the full path or just filenames.
-                    # Instructions say: "Append a list of local file links (from the .attachments/ folder)"
                     link_path = f".attachments/{att.relative_path}"
+                    if export_dir is not None:
+                        copied = _copy_attachment(db, att, export_dir)
+                        if copied is not None:
+                            link_path = copied
                     report.append(f"- [{att.filename}]({link_path})")
             
             report.append("\n---\n")

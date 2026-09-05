@@ -74,3 +74,37 @@ def test_generate_markdown_report_with_findings_and_attachments(
     assert "### Exposed Debug Endpoint" in report
     assert "**Severity:** Medium" in report
     assert "Endpoint at /debug/pprof exposed." in report
+
+
+def test_generate_markdown_report_copies_attachments_to_export_dir(
+    db: Database, project: Project, tmp_path
+) -> None:
+    """With export_dir set, attachment files are copied next to the report."""
+    vulnerable_node = node_repo.insert_node(
+        db,
+        Node(
+            project_id=project.id,
+            type=NodeType.CHECKLIST,
+            title="SQL Injection in Login",
+            status=NodeStatus.VULNERABLE,
+            scope_tags=["critical"],
+        ),
+    )
+    att = Attachment(
+        node_id=vulnerable_node.id,
+        filename="sqli_proof.png",
+        mime_type="image/png",
+        data=b"dummy-png-bytes",
+    )
+    attachment_repo.insert_attachment(db, att)
+
+    export_dir = tmp_path / "report_output"
+    export_dir.mkdir()
+    report = generate_markdown_report(db, project.id, export_dir=export_dir)
+
+    # The copied file exists and the report links to it.
+    copied = list((export_dir / ".attachments").rglob("*sqli_proof.png"))
+    assert len(copied) == 1
+    assert copied[0].read_bytes() == b"dummy-png-bytes"
+    rel_link = copied[0].relative_to(export_dir).as_posix()
+    assert f"]({rel_link})" in report
