@@ -1,0 +1,79 @@
+id: mobile_app_sec
+name: Mobile Application Security (Android & iOS)
+version: "1.0.0"
+author: HackMind
+description: >
+  Comprehensive methodology for mobile application security testing, 
+  based on OWASP MSTG/MASTG.
+tier: asset
+
+nodes:
+  - id: mobile_static_analysis
+    type: info
+    title: "1. Static Analysis & Reverse Engineering"
+    content: "Decompiling and auditing the app package."
+    children:
+      - id: android_static
+        type: checklist
+        title: Android Static Audit
+        scope_tags: ["low", "android"]
+        content: |
+          - [ ] `apktool d app.apk`: Decompile and check `AndroidManifest.xml`
+          - [ ] Check `android:debuggable="true"` (CRITICAL)
+          - [ ] Check `android:allowBackup="true"`
+          - [ ] Find hardcoded API keys and endpoints: `grep -r "http" .`
+          - [ ] Audit `networkSecurityConfig`: cleartext permitted?
+
+      - id: ios_static
+        type: checklist
+        title: iOS Static Audit
+        scope_tags: ["low", "ios"]
+        content: |
+          - [ ] Extract `.ipa` and check `Info.plist` for permissions
+          - [ ] `strings app_binary | grep -E "http|https"`
+          - [ ] Check for App Transport Security (ATS) exceptions
+
+  - id: mobile_dynamic_analysis
+    type: info
+    title: "2. Dynamic Analysis & Traffic Interception"
+    content: "Hooking and proxying the application in real-time."
+    children:
+      - id: root_jailbreak_detection
+        type: checklist
+        title: Bypass Root / Jailbreak Detection
+        scope_tags: ["medium", "bypass"]
+        content: |
+          ### Detection Bypass
+          - [ ] Use Frida to hook detection methods: `frida -U -f com.app.package -l bypass.js`
+          - [ ] Use Objection: `objection --gadget com.app.package explore` -> `android root disable`
+
+      - id: ssl_pinning_bypass
+        type: checklist
+        title: SSL Pinning Bypass
+        scope_tags: ["high", "bypass", "traffic"]
+        content: |
+          ### Intercepting HTTPS
+          - [ ] Hook `SSLContext` or `TrustManager` using Frida
+          - [ ] Use `flutter-ssl-pinning-bypass` if it's a Flutter app.
+
+  - id: mobile_storage_logic
+    type: info
+    title: "3. Insecure Storage & Sensitive Data"
+    content: "Auditing local data persistence."
+    children:
+      - id: local_storage_audit
+        type: checklist
+        title: File System & Database Audit
+        scope_tags: ["medium", "storage"]
+        content: |
+          - [ ] Android: `/data/data/com.app.package/` (SharedPreferences, SQLite)
+          - [ ] iOS: `/var/mobile/Containers/Data/Application/...` (UserDefaults, CoreData)
+          - [ ] Check for sensitive data in `NSUserDefaults` or `SharedPreferences`.
+
+  - id: mobile_intent_vulns
+    type: checklist
+    title: Intent / URL Scheme Redirection
+    scope_tags: ["high", "android", "ios"]
+    content: |
+      - [ ] Android: Audit `exported` components and intent-redirection to private activities.
+      - [ ] iOS: Deep link (Custom URL Schemes) hijacking and parameter injection.

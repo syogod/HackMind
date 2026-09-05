@@ -1,0 +1,110 @@
+name: "Advanced API Security Testing"
+version: "1.0.0"
+author: "HackMind (from Markdown Repo)"
+tier: asset
+description: >
+  Deep-dive methodology for REST, GraphQL, and gRPC APIs.
+  Includes BOLA (API1), BOPLA (API3), Mass Assignment, 
+  and modern API-specific injection attacks.
+
+nodes:
+  - id: api_recon
+    type: info
+    title: "API Reconnaissance & Discovery"
+    content: "Mapping the API attack surface."
+    children:
+      - id: api_endpoint_discovery
+        type: checklist
+        title: "Endpoint and Documentation Discovery"
+        content: |
+          Search for hidden endpoints and documentation:
+          - /swagger, /swagger.json, /openapi.json, /api-docs, /redoc
+          - Use kiterunner: kr scan https://{{target_name}}/api/ -w routes-large.kite
+          - Parse JS bundles for URL patterns (/api/v1/...)
+          - Check wayback machine for deprecated versions (v1, v2, beta)
+
+      - id: api_versioning
+        type: checklist
+        title: "API Version Analysis"
+        content: |
+          Test if older versions are still active and lack security controls:
+          - Try downgrading /api/v3/user to /api/v1/user
+          - Check if authentication or rate limiting is missing on older endpoints
+
+  - id: api_auth
+    type: info
+    title: "API Authentication & Authorization"
+    content: "Testing tokens, keys, and access controls."
+    children:
+      - id: api_bola
+        type: checklist
+        title: "BOLA (Broken Object Level Authorization) - API1"
+        content: |
+          Replace your resource ID with another user's ID in every endpoint:
+          - GET /api/v1/messages/{id}
+          - POST /api/v1/users/{id}/update
+          - DELETE /api/v1/orders/{id}
+          Test across different roles and account types.
+
+      - id: api_bofla
+        type: checklist
+        title: "BFLA (Broken Function Level Authorization) - API5"
+        content: |
+          Attempt to call administrative or privileged functions as a regular user:
+          - /api/admin/config
+          - /api/v1/users/export
+          - Test HTTP methods: if GET /api/v1/users is allowed, try DELETE /api/v1/users/123
+
+      - id: api_mass_assignment
+        type: checklist
+        title: "Mass Assignment & BOPLA - API3"
+        content: |
+          Try adding privileged fields to request bodies:
+          - {"role": "admin", "isAdmin": true, "verified": true}
+          - {"credits": 99999, "plan": "enterprise"}
+          - Test in registration, profile update, and resource creation.
+
+  - id: api_injection
+    type: info
+    title: "Modern API Injection"
+    content: "Testing for injection in JSON and structured formats."
+    children:
+      - id: api_nosql_injection
+        type: checklist
+        title: "NoSQL Injection (JSON)"
+        content: |
+          Test JSON login and filter bodies:
+          - {"username": {"$ne": null}, "password": {"$ne": null}}
+          - {"username": "admin", "password": {"$gt": ""}}
+          - Test in MongoDB, CouchDB, and other NoSQL stores.
+
+      - id: api_graphql_security
+        type: checklist
+        title: "GraphQL Security Deep-Dive"
+        content: |
+          - Introspection: { __schema { types { name fields { name } } } }
+          - Batching Attack: send 100+ queries in one request to bypass rate limits
+          - Alias Overload: use many aliased operations to brute-force or DoS
+          - Depth Attack: deeply nested queries to exhaust server resources
+          - Mutation IDOR: test authorization on every mutation field
+
+  - id: api_business_logic
+    type: info
+    title: "API Business Logic & Abuse"
+    content: "Testing for logic flaws and resource exhaustion."
+    children:
+      - id: api_resource_consumption
+        type: checklist
+        title: "Unrestricted Resource Consumption - API4"
+        content: |
+          - Test for missing rate limits on expensive operations (PDF export, complex search)
+          - Upload extremely large files or JSON bodies
+          - Long string inputs to trigger regex DoS (ReDoS)
+
+      - id: api_business_flow_abuse
+        type: checklist
+        title: "Abuse of Business Flows - API6"
+        content: |
+          - Can bots automate sensitive flows (account creation, bulk orders)?
+          - Lack of CAPTCHA or anti-automation on sensitive API endpoints.
+          - Circular dependencies in API calls leading to resource exhaustion.

@@ -11,10 +11,9 @@ node_selected(node_id) when the user clicks a node.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QModelIndex, QPoint, QSortFilterProxyModel, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QAbstractItemModel, QModelIndex, QPoint, QSortFilterProxyModel, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFont
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QCheckBox,
     QHBoxLayout,
     QLabel,
@@ -26,7 +25,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
 from hackmind.db import node_repo, scope_repo
 from hackmind.db.database import Database
 from hackmind.engine.status import compute_project_statuses
@@ -62,7 +60,7 @@ _FINDING_SUFFIX = "  ⚑"
 # ---------------------------------------------------------------------------
 
 class _TreeItem:
-    __slots__ = ("node", "parent", "children", "derived_status", "is_answered")
+    __slots__ = ("node", "parent", "children", "derived_status", "is_answered", "has_fetched_children")
 
     def __init__(self, node: Node, parent: "_TreeItem | None" = None) -> None:
         self.node = node
@@ -70,55 +68,77 @@ class _TreeItem:
         self.children: list["_TreeItem"] = []
         self.derived_status: NodeStatus = node.status
         self.is_answered: bool = False
+        self.has_fetched_children: bool = False
 
 
-from PyQt6.QtCore import QAbstractItemModel
-
+# High-contrast severity colors
+_SEVERITY_COLORS = {
+    "critical": "#DC2626", # Red-600
+    "high":     "#EA580C", # Orange-600
+    "medium":   "#D97706", # Amber-600
+    "low":      "#059669", # Emerald-600
+    "info":     "#2563EB", # Blue-600
+}
 
 class _QtTreeModel(QAbstractItemModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._roots: list[_TreeItem] = []
         self._item_map: dict[str, _TreeItem] = {}
+        self._db: Database | None = None
+        self._project_id: str | None = None
+        self._statuses: dict[str, NodeStatus] = {}
+        self._answers: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public
     # ------------------------------------------------------------------
 
-    def load(
+    def load_project(
         self,
-        nodes: list[Node],
+        db: Database,
+        project_id: str,
         statuses: dict[str, NodeStatus],
         answers: set[str],
     ) -> None:
         self.beginResetModel()
+        self._db = db
+        self._project_id = project_id
+        self._statuses = statuses
+        self._answers = answers
+        self._item_map = {}
+        self._roots = []
 
-        all_items: dict[str, _TreeItem] = {}
-        for node in nodes:
-            item = _TreeItem(node)
-            item.derived_status = statuses.get(node.id, node.status)
-            item.is_answered = node.id in answers
-            all_items[node.id] = item
+        all_nodes = node_repo.get_project_nodes(db, project_id, include_soft_deleted=False)
 
-        roots: list[_TreeItem] = []
-        for node in nodes:
-            item = all_items[node.id]
-            if node.parent_id is None or node.parent_id not in all_items:
-                roots.append(item)
-            else:
-                parent_item = all_items[node.parent_id]
-                item.parent = parent_item
-                parent_item.children.append(item)
+        children_map: dict[str | None, list[Node]] = {}
+        for n in all_nodes:
+            children_map.setdefault(n.parent_id, []).append(n)
 
-        def _sort(items: list[_TreeItem]) -> None:
-            items.sort(key=lambda x: x.node.position)
-            for it in items:
-                _sort(it.children)
+        def _build_items(parent_id: str | None, parent_item: _TreeItem | None) -> list[_TreeItem]:
+            nodes = children_map.get(parent_id, [])
+            items = []
+            for n in nodes:
+                item = _TreeItem(n, parent=parent_item)
+                item.derived_status = statuses.get(n.id, n.status)
+                item.is_answered = n.id in answers
+                item.has_fetched_children = True
+                self._item_map[n.id] = item
+                item.children = _build_items(n.id, item)
+                items.append(item)
+            return items
 
-        _sort(roots)
-        self._roots = roots
-        self._item_map = all_items
+        self._roots = _build_items(None, None)
+        self.endResetModel()
 
+    def clear(self) -> None:
+        self.beginResetModel()
+        self._roots = []
+        self._item_map = {}
+        self._db = None
+        self._project_id = None
+        self._statuses = {}
+        self._answers = set()
         self.endResetModel()
 
     def item_for_node(self, node_id: str) -> "_TreeItem | None":
@@ -127,6 +147,18 @@ class _QtTreeModel(QAbstractItemModel):
     # ------------------------------------------------------------------
     # QAbstractItemModel required overrides
     # ------------------------------------------------------------------
+
+    def canFetchMore(self, parent: QModelIndex) -> bool:
+        return False
+
+    def fetchMore(self, parent: QModelIndex) -> None:
+        return
+
+    def hasChildren(self, parent: QModelIndex = QModelIndex()) -> bool:
+        if not parent.isValid():
+            return len(self._roots) > 0
+        item: _TreeItem = parent.internalPointer()
+        return len(item.children) > 0
 
     def index(self, row: int, col: int, parent: QModelIndex = QModelIndex()) -> QModelIndex:
         if not self.hasIndex(row, col, parent):
@@ -144,7 +176,10 @@ class _QtTreeModel(QAbstractItemModel):
             return QModelIndex()
         p = item.parent
         grandparent_children = self._roots if p.parent is None else p.parent.children
-        row = grandparent_children.index(p)
+        try:
+            row = grandparent_children.index(p)
+        except ValueError:
+            return QModelIndex()
         return self.createIndex(row, 0, p)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
@@ -152,7 +187,8 @@ class _QtTreeModel(QAbstractItemModel):
             return 0
         if not parent.isValid():
             return len(self._roots)
-        return len(parent.internalPointer().children)
+        item: _TreeItem = parent.internalPointer()
+        return len(item.children)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 1
@@ -168,16 +204,26 @@ class _QtTreeModel(QAbstractItemModel):
             return f"{prefix}{item.node.title}{suffix}"
 
         if role == Qt.ItemDataRole.ForegroundRole:
+            # Severity Highlighting for Vulnerable Nodes
+            if item.derived_status == NodeStatus.VULNERABLE:
+                # Try to find severity in scope_tags
+                for tag in item.node.scope_tags:
+                    if tag.lower() in _SEVERITY_COLORS:
+                        return QColor(_SEVERITY_COLORS[tag.lower()])
+                return QColor(_STATUS_COLORS[NodeStatus.VULNERABLE])
+
             if item.node.type == NodeType.QUESTION and item.is_answered:
                 return QColor(_ANSWERED_QUESTION_COLOR)
             hex_color = _STATUS_COLORS.get(item.derived_status, "#000000")
             return QColor(hex_color)
 
         if role == Qt.ItemDataRole.FontRole:
+            font = QFont()
             if item.node.status == NodeStatus.NOT_APPLICABLE:
-                font = QFont()
                 font.setStrikeOut(True)
-                return font
+            if item.derived_status == NodeStatus.VULNERABLE:
+                font.setBold(True)
+            return font
 
         if role == Qt.ItemDataRole.UserRole:
             return item.node.id
@@ -327,10 +373,9 @@ class TreePanel(QWidget):
     def load(self, db: Database, project_id: str) -> None:
         self._db = db
         self._project_id = project_id
-        nodes = node_repo.get_project_nodes(db, project_id)
         statuses = compute_project_statuses(db, project_id)
         answers = set(node_repo.get_answers_for_project(db, project_id).keys())
-        self._model.load(nodes, statuses, answers)
+        self._model.load_project(db, project_id, statuses, answers)
         oos = scope_repo.get_oos_tags(db, project_id)
         self._proxy.set_oos_tags(oos)
         self._scope_btn.setEnabled(True)
@@ -342,17 +387,11 @@ class TreePanel(QWidget):
         self._emit_width_hint()
 
     def _collapse_info_nodes(self) -> None:
-        """Collapse all INFO nodes so the tree opens in a tidy state."""
-        def _walk(parent: QModelIndex) -> None:
-            for row in range(self._proxy.rowCount(parent)):
-                idx = self._proxy.index(row, 0, parent)
-                source = self._proxy.mapToSource(idx)
-                node_id = self._model.data(source, Qt.ItemDataRole.UserRole)
-                item = self._model.item_for_node(node_id)
-                if item and item.node.type == NodeType.INFO:
+        for node_id, item in list(self._model._item_map.items()):
+            if item.node.type == NodeType.INFO:
+                idx = self._proxy_index_for_node(node_id)
+                if idx.isValid():
                     self._tree.collapse(idx)
-                _walk(idx)
-        _walk(QModelIndex())
 
     def refresh(self, db: Database, project_id: str) -> None:
         """Reload tree data, preserving expansion state, selection, and scroll position."""
@@ -361,15 +400,12 @@ class TreePanel(QWidget):
         selected_id = self._current_node_id()
         expanded = self._get_expanded_ids()
 
-        # Save scroll position before model reset — beginResetModel/endResetModel
-        # inside model.load() causes Qt to reset the viewport to the top.
         vbar = self._tree.verticalScrollBar()
         saved_scroll = vbar.value()
 
-        nodes = node_repo.get_project_nodes(db, project_id)
         statuses = compute_project_statuses(db, project_id)
         answers = set(node_repo.get_answers_for_project(db, project_id).keys())
-        self._model.load(nodes, statuses, answers)
+        self._model.load_project(db, project_id, statuses, answers)
         oos = scope_repo.get_oos_tags(db, project_id)
         self._proxy.set_oos_tags(oos)
         self._proxy.set_hide_done(self._hide_done_btn.isChecked())
@@ -377,12 +413,13 @@ class TreePanel(QWidget):
         self._hide_done_btn.setEnabled(True)
         self._update_scope_button(oos)
         self._update_progress(db, project_id, oos)
+        
         self._restore_expanded(expanded)
+        
         if selected_id:
             self._reselect(selected_id, scroll=False)
         self._emit_width_hint()
 
-        # Restore scroll position after all tree operations are complete.
         vbar.setValue(saved_scroll)
 
     def clear(self) -> None:
@@ -396,7 +433,7 @@ class TreePanel(QWidget):
         self._hide_done_btn.setChecked(False)
         self._progress_bar.setVisible(False)
         self._progress_label.setVisible(False)
-        self._model.load([], {}, set())
+        self._model.clear()
         self._emit_width_hint()
 
     def select_node(self, node_id: str) -> None:

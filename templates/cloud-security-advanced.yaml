@@ -1,0 +1,104 @@
+name: "Cloud Security (AWS/Azure/GCP)"
+version: "1.0.0"
+author: "HackMind"
+tier: asset
+description: >
+  Exhaustive methodology for testing cloud environments, 
+  focusing on misconfigurations and identity abuse.
+
+nodes:
+  - id: cloud_recon
+    type: info
+    title: "1. Cloud Discovery & Asset Mapping"
+    content: "Identifying the footprint of the organization in the cloud."
+    children:
+      - id: cloud_subdomain_discovery
+        type: checklist
+        title: "Subdomain Enumeration"
+        content: |
+          - [ ] Find organization's cloud subdomains: `s3.amazonaws.com`, `blob.core.windows.net`, `storage.googleapis.com`
+          - [ ] Use `cloud_enum`: `cloud_enum -d <DOMAIN>`
+
+      - id: cloud_storage_enumeration
+        type: checklist
+        title: "Public Storage & Permissions"
+        content: |
+          - [ ] Enumerate S3 buckets/Azure blobs for public read/write access
+          - [ ] Check for directory listing or sensitive data (backups, keys, PII)
+
+  - id: aws_security
+    type: info
+    title: "2. AWS Security Testing"
+    content: "Deep-dive into AWS-specific vulnerabilities."
+    children:
+      - id: aws_iam_privesc
+        type: checklist
+        title: "IAM Privilege Escalation"
+        content: |
+          - [ ] Check for `iam:CreateNewPolicyVersion` or `iam:SetDefaultPolicyVersion`
+          - [ ] Look for `iam:PassRole` combined with `ec2:RunInstances`
+          - [ ] Test for `sts:AssumeRole` chain abuse
+
+      - id: aws_metadata_abuse
+        type: checklist
+        title: "IMDSv1 vs IMDSv2"
+        content: |
+          - [ ] Test for SSRF on EC2 to access IMDSv1: `http://169.254.169.254/latest/meta-data/`
+          - [ ] Attempt to steal IAM credentials via metadata service
+
+  - id: azure_security
+    type: info
+    title: "3. Azure Security Testing"
+    content: "Deep-dive into Azure-specific vulnerabilities."
+    children:
+      - id: azure_entra_id_abuse
+        type: checklist
+        title: "Entra ID (Azure AD) Enumeration"
+        content: |
+          - [ ] Enumerate users/groups using `Roadtools` or `Azurehound`
+          - [ ] Check for 'Global Admin' or other high-privilege roles without MFA
+
+      - id: azure_managed_identities
+        type: checklist
+        title: "Managed Identity Abuse"
+        content: |
+          - [ ] Access the Azure Instance Metadata Service (IMDS) from a VM: `http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/`
+
+  - id: gcp_security
+    type: info
+    title: "4. GCP Security Testing"
+    content: "Deep-dive into GCP-specific vulnerabilities."
+    children:
+      - id: gcp_iam_privesc
+        type: checklist
+        title: "IAM Policy Analysis"
+        content: |
+          - [ ] Enumerate service accounts and their keys
+          - [ ] Check for `iam.serviceAccounts.getAccessToken` permission
+
+      - id: gcp_metadata_exfiltration
+        type: checklist
+        title: "GCP Metadata Server"
+        content: |
+          - [ ] Access the metadata server: `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token`
+          - [ ] Requires header: `Metadata-Flavor: Google`
+
+  - id: container_security
+    type: info
+    title: "5. Container & K8s Security"
+    content: "Testing for container escapes and orchestration flaws."
+    children:
+      - id: docker_escape
+        type: checklist
+        title: "Docker Escape Techniques"
+        content: |
+          - [ ] Check for exposed Docker socket: `/var/run/docker.sock`
+          - [ ] Test for privileged container: `capsh --print`
+          - [ ] Look for mount points that leak host filesystem access
+
+      - id: kubernetes_enumeration
+        type: checklist
+        title: "Kubernetes API & RBAC"
+        content: |
+          - [ ] Test for anonymous access to K8s API: `kubectl get nodes --server https://<IP>:6443`
+          - [ ] Check service account token permissions: `kubectl auth can-i --list`

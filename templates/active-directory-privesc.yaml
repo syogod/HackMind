@@ -1,0 +1,106 @@
+name: "Active Directory Privilege Escalation"
+version: "1.0.0"
+author: "HackMind"
+tier: asset
+description: >
+  Comprehensive methodology for enumerating and escalating 
+  privileges in an Active Directory environment.
+
+nodes:
+  - id: ad_recon
+    type: info
+    title: "1. AD Enumeration (Unauthenticated)"
+    content: "Initial mapping from a non-domain joined machine."
+    children:
+      - id: ad_port_scan
+        type: checklist
+        title: "Domain Controller Discovery"
+        content: |
+          - [ ] Port scan for common AD ports: 88 (Kerberos), 135 (RPC), 389 (LDAP), 445 (SMB), 636 (LDAPS), 3268/3269 (Global Catalog)
+          - [ ] Identify OS versions and potential vulnerabilities (e.g., EternalBlue, BlueKeep)
+
+      - id: ad_null_sessions
+        type: checklist
+        title: "Null Session & Guest Access"
+        content: |
+          - [ ] Test for SMB null sessions: `rpcclient -U "" -N <DC_IP>`
+          - [ ] List users and groups: `enumdomusers`, `enumdomgroups`
+          - [ ] Check for guest access on shares: `crackmapexec smb <DC_IP> -u 'guest' -p '' --shares`
+
+  - id: ad_credentials
+    type: info
+    title: "2. Credential Harvesting & Lateral Movement"
+    content: "Obtaining and leveraging initial credentials."
+    children:
+      - id: ad_password_spraying
+        type: checklist
+        title: "Password Spraying"
+        content: |
+          - [ ] Spray common passwords against harvested user list: `crackmapexec smb <DC_IP> -u users.txt -p 'Spring2024!'`
+          - [ ] Be mindful of lockout policies! Check with `net accounts` if possible.
+
+      - id: kerberoasting
+        type: checklist
+        title: "Kerberoasting"
+        content: |
+          - [ ] Request Service Tickets for SPNs: `GetUserSPNs.py -dc-ip <DC_IP> <DOMAIN>/<USER>:<PASS> -request`
+          - [ ] Crack the resulting hashes offline with `hashcat` (mode 13100)
+
+      - id: as_rep_roasting
+        type: checklist
+        title: "AS-REP Roasting"
+        content: |
+          - [ ] Check for users with 'Do not require Kerberos preauthentication' enabled: `GetNPUsers.py <DOMAIN>/ -dc-ip <DC_IP> -usersfile users.txt -format hashcat`
+
+  - id: ad_privesc_local
+    type: info
+    title: "3. Local Privilege Escalation (Windows)"
+    content: "Escalating from standard user to SYSTEM on a domain host."
+    children:
+      - id: win_enumeration_scripts
+        type: checklist
+        title: "Automated Enumeration"
+        content: |
+          - [ ] Run `WinPEAS.exe` to find low-hanging fruit
+          - [ ] Use `PowerUp.ps1`: `Invoke-AllChecks`
+
+      - id: win_vulnerabilities
+        type: checklist
+        title: "Common Windows Flaws"
+        content: |
+          - [ ] Check for unquoted service paths
+          - [ ] Look for cleartext credentials in files (unattend.xml, config files, web.config)
+          - [ ] Search for AlwaysInstallElevated registry keys
+
+  - id: ad_privesc_domain
+    type: info
+    title: "4. Domain Privilege Escalation"
+    content: "Moving from domain user to Domain Admin."
+    children:
+      - id: bloodhound_analysis
+        type: checklist
+        title: "BloodHound / Sharphound"
+        content: |
+          - [ ] Run SharpHound: `.\Sharphound.exe -c All`
+          - [ ] Analyze paths to Domain Admin in the Neo4j console
+
+      - id: gpp_passwords
+        type: checklist
+        title: "Group Policy Preferences (GPP)"
+        content: |
+          - [ ] Search for `groups.xml` or `scheduledtasks.xml` in SYSVOL for encrypted passwords
+          - [ ] Decrypt using `gpp-decrypt`
+
+      - id: ad_delegation
+        type: checklist
+        title: "Unconstrained & Constrained Delegation"
+        content: |
+          - [ ] Identify accounts with delegation enabled
+          - [ ] Perform S4U2self / S4U2proxy attacks if applicable
+
+      - id: adcs_attacks
+        type: checklist
+        title: "AD CS (Certificate Services) Abuse"
+        content: |
+          - [ ] Enumerate vulnerable certificate templates: `Certify.exe find /vulnerable`
+          - [ ] Request a certificate for a privileged user (ESC1, ESC8)

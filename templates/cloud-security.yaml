@@ -1,0 +1,62 @@
+name: "Cloud Security & Infrastructure"
+version: "1.0.0"
+author: "HackMind (from Markdown Repo)"
+tier: asset
+description: >
+  Methodology for AWS, Azure, GCP, and Kubernetes security.
+  Covers metadata service abuse (SSRF), storage misconfigs,
+  and container escapes.
+
+nodes:
+  - id: cloud_recon
+    type: info
+    title: "Cloud Reconnaissance"
+    content: "Identifying cloud assets and metadata."
+    children:
+      - id: cloud_storage_discovery
+        type: checklist
+        title: "Public Storage Discovery"
+        content: |
+          Find misconfigured buckets and blobs:
+          - AWS S3: https://{{target_name}}.s3.amazonaws.com
+          - Azure Blobs: https://{{target_name}}.blob.core.windows.net
+          - GCP Buckets: https://storage.googleapis.com/{{target_name}}
+          Use s3scanner or cloud_enum for automated discovery.
+
+  - id: cloud_ssrf_imds
+    type: info
+    title: "IMDS Abuse (SSRF)"
+    content: "Exfiltrating credentials via the Instance Metadata Service."
+    children:
+      - id: aws_imds_v1
+        type: checklist
+        title: "AWS IMDSv1 Credential Theft"
+        content: |
+          Target: http://169.254.169.254/latest/meta-data/iam/security-credentials/
+          If a role name is returned, fetch it to get AKID, Secret, and Token.
+
+      - id: gcp_metadata_abuse
+        type: checklist
+        title: "GCP Metadata Exfiltration"
+        content: |
+          Target: http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+          Requires Header: "Metadata-Flavor: Google"
+
+  - id: container_security
+    type: info
+    title: "Container & Kubernetes Security"
+    content: "Testing for container escapes and K8s misconfigs."
+    children:
+      - id: docker_socket_exposure
+        type: checklist
+        title: "Docker Socket Exposure"
+        content: |
+          Check for /var/run/docker.sock inside the container.
+          If exposed, use it to spawn a privileged container with the host root mounted.
+
+      - id: k8s_service_account
+        type: checklist
+        title: "Kubernetes Service Account Analysis"
+        content: |
+          Check /var/run/secrets/kubernetes.io/serviceaccount/token
+          Use it with kubectl or curl to enumerate pods and secrets if permissions allow.

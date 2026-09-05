@@ -83,7 +83,7 @@ def _parse_template(data: dict, source_file: str | None) -> Template:
             f"Invalid tier '{tier}'. Must be 'engagement' or 'asset'."
         )
 
-    return Template(
+    res = Template(
         id=str(uuid.uuid4()),
         name=str(data["name"]),
         version=str(data["version"]),
@@ -93,6 +93,8 @@ def _parse_template(data: dict, source_file: str | None) -> Template:
         nodes=nodes,
         source_file=source_file,
     )
+    res.initialize_lookup()
+    return res
 
 
 def _parse_node(raw: Any, seen_ids: set[str], context: str) -> TemplateNode:
