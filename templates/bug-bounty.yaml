@@ -1,5 +1,5 @@
 name: "Bug Bounty Program"
-version: "1.1.0"
+version: "1.2.0"
 author: "HackMind"
 tier: engagement
 description: >
@@ -386,3 +386,72 @@ nodes:
           - Any secrets or credentials found in code / pastes
           - Tech stack patterns across assets (same framework everywhere = one bug hits all)
           - Login portals with default credentials worth trying early
+
+  # ===========================================================================
+  # RECON-TO-EXPLOIT TRICKS (from HowToHunt)
+  # ===========================================================================
+  - id: recon_exploit_tricks
+    type: info
+    title: "Recon-to-Exploit Tricks"
+    content: "High-signal bypass and takeover techniques to run after asset discovery."
+    children:
+      - id: takeover_deep
+        type: checklist
+        title: "Deep subdomain takeover sweep"
+        scope_tags: [high, takeover]
+        content: |
+          - cat domains.txt | while read d; do dig +short CNAME $d; done | sort -u
+          - Any CNAME to a claimable service (S3, Azure, Heroku, GitHub Pages, Fastly,
+            Shopify, Tilda, Unbounce, Readme.io, Surge, Webflow, Helpjuice...) -> check
+            fingerprints: github.com/EdOverflow/can-i-take-over-xyz
+          - Automate: subzy run --targets resolved.txt / subjack -w hosts
+          - CNAME pointing to a purchasable (unregistered) domain = instant win
+          - HTTP fingerprints of unclaimed services: "NoSuchBucket", "There isn't a
+            GitHub Pages site here", "Fastly error: unknown domain"
+
+      - id: status_code_bypass
+        type: checklist
+        title: "403 / status code bypass"
+        scope_tags: [bypass]
+        content: |
+          Path variants against the blocked path:
+          - /secret/./ , /secret/../secret , //secret , /./secret , /%2e/secret
+          - /%2f/secret , /secret? , /secret/ , /secret..;/  (Tomcat)
+          Protocol swap: https:// 403 -> http:// 200
+          Headers: X-Original-Url / X-Rewrite-URL / X-Forwarded-For: 127.0.0.1 /
+          X-Custom-IP-Authorization: 127.0.0.1 / Client-IP / X-Host
+          Automate: 4-ZERO-3 or 403bypasser; also try the same path on the origin IP
+          (found via DNS history / crt.sh SANs) with Host: {{target_name}}
+
+      - id: origin_ip
+        type: checklist
+        title: "Origin IP discovery behind WAF/CDN"
+        scope_tags: [recon, waf]
+        content: |
+          - viewdns.info/iphistory + securitytrails: A records before the CDN was added
+          - crt.sh SANs on certs issued to the same org
+          - Shodan: ssl.cert.subject.CN:"{{target_name}}"
+          - Confirm: curl -sk -H "Host: {{target_name}}" https://<ip>/ returns the app
+          - Then hit /admin, /api, /login directly on the origin — WAF rules often absent
+
+      - id: broken_link_hijack
+        type: checklist
+        title: "Broken link hijacking"
+        scope_tags: [medium, recon]
+        content: |
+          - npx broken-link-checker -rof --filter-level 3 https://{{target_name}}/
+          - Dead external links to social profiles / docs / CDNs
+          - Claim the dead handle or expired domain, host a phishing page under a
+            link the target's own site endorses
+          - Also sweep wayback-extracted external links with httpx
+
+      - id: rate_limit_bypass
+        type: checklist
+        title: "Rate limit bypass battery"
+        scope_tags: [medium, bypass]
+        content: |
+          - Rotate per-request: X-Forwarded-For / X-Real-IP / X-Client-IP /
+            True-Client-IP / Client-IP with random IPs
+          - Verb swap GET<->POST, path casing (/Login), trailing slash, %2e encoding
+          - Repeat the limited parameter (code=a&code=b) or send it as an array
+          - Fresh session/cookie per request when limits are per-session

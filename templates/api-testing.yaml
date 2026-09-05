@@ -1,5 +1,5 @@
 name: "API Security Testing"
-version: "2.2.0"
+version: "2.3.0"
 author: "HackMind"
 tier: asset
 description: >
@@ -78,6 +78,8 @@ nodes:
           - Look for /api/ patterns and versioned prefixes (/v1/, /v2/)
           - Extract endpoints from mobile app binaries and decompiled sources
           - Automated route brute-force: kiterunner (`kr scan https://{{target_name}}/api/ -w routes-large.kite`)
+          - Reverse-engineer undocumented APIs: capture traffic with mitmweb, then
+            `mitmproxy2swagger -i flows -o spec.yml -p <api-base> -f flow` -> importable spec
           - Note every base path and version prefix — old versions often survive
 
       - id: recon_methods
