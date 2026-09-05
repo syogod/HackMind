@@ -411,8 +411,19 @@ def resync_scope_tags(db: Database) -> None:
 
         with db.conn:
             for nr in node_rows:
-                desired = tag_map.get(nr["template_node_id"], [])
+                desired = list(tag_map.get(nr["template_node_id"], []))
                 current = json.loads(nr["scope_tags"] or "[]")
+                # Preserve the user-set severity tag — it is user data, not
+                # template data, and must survive template resyncs.
+                user_severity = next(
+                    (t for t in current if t.lower() in node_repo.SEVERITY_TAGS),
+                    None,
+                )
+                if user_severity:
+                    desired = [
+                        t for t in desired if t.lower() not in node_repo.SEVERITY_TAGS
+                    ]
+                    desired.append(user_severity)
                 if desired != current:
                     db.conn.execute(
                         "UPDATE nodes SET scope_tags = ? WHERE id = ?",

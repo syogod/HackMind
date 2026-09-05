@@ -446,3 +446,23 @@ def test_answering_question_on_one_asset_does_not_affect_other(
 
     rq2 = node_repo.get_children(db, asset2.id)[0]
     assert node_repo.get_answer(db, rq2.id) is None
+
+
+def test_resync_scope_tags_preserves_user_severity(
+    db: Database, proj: Project, db_template_id: str
+) -> None:
+    """Startup template resync must not wipe the user-set severity tag."""
+    from hackmind.engine import tree_engine as te
+
+    asset = _setup_asset(db, proj, db_template_id, "sev.com")
+    rq = node_repo.get_children(db, asset.id)[0]
+    answer_question(db, rq.id, "webapp")
+
+    # Find an instantiated checklist node and set a user severity on it.
+    checklist = _node_by_tid(db, proj.id, "check_recon")
+    node_repo.set_severity(db, checklist.id, "critical")
+
+    te.resync_scope_tags(db)
+
+    fetched = node_repo.get_node(db, checklist.id)
+    assert "critical" in fetched.scope_tags
