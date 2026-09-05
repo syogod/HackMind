@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
 )
 
+from hackmind.ui.themes import title_point_size
 from hackmind.db import node_repo
 from hackmind.db.database import Database
 from hackmind.models.types import Node, NodeStatus
@@ -81,7 +82,7 @@ class ChecklistPanel(QWidget):
         self._title = QLabel()
         self._title.setWordWrap(True)
         font = self._title.font()
-        font.setPointSize(14)
+        font.setPointSize(title_point_size())
         font.setBold(True)
         self._title.setFont(font)
 

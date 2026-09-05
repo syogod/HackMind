@@ -559,11 +559,12 @@ class MainWindow(QMainWindow):
         if dialog.exec() != SettingsDialog.DialogCode.Accepted:
             return
 
-        # Apply theme change immediately without requiring a restart.
+        # Re-apply the theme stylesheet so a changed theme OR base font size
+        # takes effect immediately without requiring a restart.
         new_theme = _settings.theme()
+        from PyQt6.QtWidgets import QApplication
+        apply_theme(QApplication.instance(), new_theme)
         if new_theme != old_theme:
-            from PyQt6.QtWidgets import QApplication
-            apply_theme(QApplication.instance(), new_theme)
             self._sync_theme_menu(new_theme)
 
     # ------------------------------------------------------------------

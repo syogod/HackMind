@@ -5,6 +5,7 @@ Lets the user configure:
   - Database file path   — QLineEdit + Browse button; takes effect on restart
   - Note auto-save delay — QSpinBox (100–5000 ms); takes effect immediately
   - UI theme             — QComboBox; applied immediately on OK
+  - Base font size       — QSpinBox (9–24 px); applied immediately on OK
 
 All values are read from and written to hackmind.settings (QSettings-backed).
 The caller (MainWindow) is responsible for applying a theme change live after
@@ -85,6 +86,14 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self._theme.setCurrentIndex(idx)
 
+        self._font_size = QSpinBox()
+        self._font_size.setRange(9, 24)
+        self._font_size.setSuffix(" px")
+        self._font_size.setValue(_settings.base_font_size())
+        self._font_size.setToolTip(
+            "Base font size for the whole UI. Applied when you click OK."
+        )
+
         # ── Layout ────────────────────────────────────────────────────────────
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -92,6 +101,7 @@ class SettingsDialog(QDialog):
         form.addRow("", restart_note)
         form.addRow("Note auto-save:", self._autosave)
         form.addRow("Theme:", self._theme)
+        form.addRow("Font size:", self._font_size)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -138,4 +148,5 @@ class SettingsDialog(QDialog):
         _settings.set_db_path(path)
         _settings.set_autosave_delay_ms(self._autosave.value())
         _settings.set_theme(self._theme.currentText())
+        _settings.set_base_font_size(self._font_size.value())
         self.accept()

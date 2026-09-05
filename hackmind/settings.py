@@ -40,11 +40,13 @@ KEY_THEME          = "ui/theme"
 KEY_DB_PATH        = "db/path"
 KEY_AUTOSAVE_DELAY = "editor/autosave_delay_ms"
 KEY_GEOMETRY       = "ui/geometry"
+KEY_FONT_SIZE      = "ui/base_font_size"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
 DEFAULT_THEME          = "Dark"
 DEFAULT_AUTOSAVE_DELAY = 800   # milliseconds
+DEFAULT_FONT_SIZE      = 13    # px — matches the original stylesheet value
 
 
 def _default_db_path() -> str:
@@ -68,6 +70,25 @@ def set_theme(name: str) -> None:
     """Persist the chosen theme name."""
     s = _qs()
     s.setValue(KEY_THEME, name)
+
+
+# ── Base font size ────────────────────────────────────────────────────────────
+
+def base_font_size() -> int:
+    """
+    Return the base UI font size in pixels.
+    Defaults to 13 px. Valid range for the UI is 9–24 px.
+    """
+    raw = _qs().value(KEY_FONT_SIZE, DEFAULT_FONT_SIZE)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_FONT_SIZE
+
+
+def set_base_font_size(px: int) -> None:
+    """Persist the base UI font size in pixels."""
+    _qs().setValue(KEY_FONT_SIZE, int(px))
 
 
 # ── Database path ─────────────────────────────────────────────────────────────

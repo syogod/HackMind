@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from hackmind.ui.themes import title_point_size
 from hackmind.db import project_repo
 from hackmind.db.database import Database
 
@@ -31,7 +32,7 @@ class WelcomePanel(QWidget):
 
         heading = QLabel("HackMind")
         heading_font = heading.font()
-        heading_font.setPointSize(24)
+        heading_font.setPointSize(title_point_size(14))
         heading_font.setBold(True)
         heading.setFont(heading_font)
 

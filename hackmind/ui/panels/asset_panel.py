@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 
+from hackmind.ui.themes import title_point_size
 from hackmind.db import node_repo, template_repo
 from hackmind.engine import tree_engine
 from hackmind.models.types import Node
@@ -42,7 +43,7 @@ class AssetPanel(QWidget):
         self._title = QLabel()
         self._title.setWordWrap(True)
         font = self._title.font()
-        font.setPointSize(14)
+        font.setPointSize(title_point_size())
         font.setBold(True)
         self._title.setFont(font)
 
