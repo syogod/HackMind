@@ -2,6 +2,7 @@
 CRUD operations for projects.
 """
 
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -21,6 +22,7 @@ def _row_to_project(row) -> Project:
         template_id=row["template_id"],
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+        variables=json.loads(row["variables"] or "{}"),
     )
 
 
@@ -32,11 +34,11 @@ def create_project(db: Database, project: Project) -> Project:
     with db.conn:
         db.conn.execute(
             """
-            INSERT INTO projects (id, name, target_name, template_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (id, name, target_name, template_id, variables, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (project.id, project.name, project.target_name,
-             project.template_id, now, now),
+             project.template_id, json.dumps(project.variables), now, now),
         )
     return project
 
@@ -58,17 +60,17 @@ def get_project(db: Database, project_id: str) -> Optional[Project]:
 
 
 def update_project(db: Database, project: Project) -> None:
-    """Persist changes to name or target_name. Updates updated_at."""
+    """Persist changes to name, target_name, or variables. Updates updated_at."""
     now = _now()
     project.updated_at = datetime.fromisoformat(now)
     with db.conn:
         db.conn.execute(
             """
             UPDATE projects
-               SET name = ?, target_name = ?, updated_at = ?
+               SET name = ?, target_name = ?, variables = ?, updated_at = ?
              WHERE id = ?
             """,
-            (project.name, project.target_name, now, project.id),
+            (project.name, project.target_name, json.dumps(project.variables), now, project.id),
         )
 
 

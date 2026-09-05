@@ -85,20 +85,30 @@ def get_node(db: Database, node_id: str) -> Optional[Node]:
 
 def get_children(
     db: Database,
-    parent_id: str,
+    parent_id: Optional[str],
+    project_id: Optional[str] = None,
     include_soft_deleted: bool = False,
 ) -> list[Node]:
     """Return direct children of a node, ordered by position."""
-    if include_soft_deleted:
-        rows = db.conn.execute(
-            "SELECT * FROM nodes WHERE parent_id = ? ORDER BY position",
-            (parent_id,),
-        ).fetchall()
+    sql = "SELECT * FROM nodes WHERE "
+    params = []
+    
+    if parent_id is None:
+        sql += "parent_id IS NULL "
     else:
-        rows = db.conn.execute(
-            "SELECT * FROM nodes WHERE parent_id = ? AND soft_deleted = 0 ORDER BY position",
-            (parent_id,),
-        ).fetchall()
+        sql += "parent_id = ? "
+        params.append(parent_id)
+        
+    if project_id:
+        sql += "AND project_id = ? "
+        params.append(project_id)
+        
+    if not include_soft_deleted:
+        sql += "AND soft_deleted = 0 "
+        
+    sql += "ORDER BY position"
+    
+    rows = db.conn.execute(sql, tuple(params)).fetchall()
     return [_row_to_node(r) for r in rows]
 
 

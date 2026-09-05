@@ -98,7 +98,7 @@ class QuestionPanel(QWidget):
         from hackmind.engine.template_loader import load_template_from_db_row
         template = load_template_from_db_row(raw)
 
-        tnode = tree_engine._find_template_node(template, self._node.template_node_id)
+        tnode = template.get_node(self._node.template_node_id)
         if tnode is None:
             return
 

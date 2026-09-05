@@ -33,6 +33,7 @@ from hackmind.db.database import Database
 from hackmind.db.project_repo import create_project
 from hackmind.engine.template_loader import load_template_from_string
 from hackmind.engine.tree_engine import (
+    ASSET_TYPE_NODE_ID,
     add_asset,
     answer_question,
     clear_question,
@@ -159,9 +160,12 @@ def test_add_asset_creates_asset_node(
 def test_add_asset_without_template_has_no_children(
     db: Database, proj: Project
 ) -> None:
-    """A bare asset (no template chosen) has no children."""
+    """A bare asset (no template chosen) gets a bootstrap asset-type question."""
     asset = add_asset(db, proj.id, None, "bare.com")
-    assert node_repo.get_children(db, asset.id) == []
+    children = node_repo.get_children(db, asset.id)
+    assert len(children) == 1
+    assert children[0].type == NodeType.QUESTION
+    assert children[0].template_node_id == ASSET_TYPE_NODE_ID
 
 
 def test_add_asset_with_template_instantiates_top_level(

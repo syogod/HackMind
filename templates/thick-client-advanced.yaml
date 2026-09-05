@@ -1,0 +1,73 @@
+id: thick_client_sec
+name: Thick Client Application Security
+version: "1.0.0"
+author: HackMind
+description: >
+  Methodology for auditing desktop applications (Windows, Linux, macOS), 
+  covering local attacks and binary protections.
+tier: asset
+
+nodes:
+  - id: thick_info_gathering
+    type: info
+    title: "1. Information Gathering"
+    content: "Identifying the architecture and communication."
+    children:
+      - id: thick_architecture
+        type: checklist
+        title: Architecture Audit
+        content: |
+          - [ ] Determine if 2-tier (Client -> DB) or 3-tier (Client -> API -> DB).
+          - [ ] Identify language: C#, Java, C++, Go, Electron.
+          - [ ] Identify network protocols (HTTP, binary, custom TCP).
+
+  - id: thick_binary_analysis
+    type: info
+    title: "2. Binary & Static Analysis"
+    content: "Auditing the executable for protections and secrets."
+    children:
+      - id: thick_bin_protections
+        type: checklist
+        title: Binary Protections
+        content: |
+          - [ ] Check for ASLR, DEP/NX, SafeSEH, CFG.
+          - [ ] Check for strong naming and code signing.
+      - id: thick_decompilation
+        type: checklist
+        title: Decompilation & Reverse Engineering
+        content: |
+          - [ ] .NET: Use dnSpy / ILSpy to recover source code.
+          - [ ] Java: Use jd-gui.
+          - [ ] Native: Use Ghidra / IDA Pro.
+          - [ ] Look for hardcoded credentials, keys, and logic flaws.
+
+  - id: thick_local_attacks
+    type: info
+    title: "3. Local & File System Attacks"
+    content: "Privilege escalation and sensitive data on disk."
+    children:
+      - id: thick_file_perms
+        type: checklist
+        title: File & Registry Permissions
+        content: |
+          - [ ] Check for writable install directories (DLL hijacking).
+          - [ ] Check for insecure registry keys (unquoted service paths).
+      - id: thick_process_mem
+        type: checklist
+        title: Process Memory Audit
+        content: |
+          - [ ] Dump memory using `Process Hacker` or `strings`.
+          - [ ] Look for cleartext passwords/tokens after login.
+
+  - id: thick_network_interception
+    type: info
+    title: "4. Network Interception"
+    content: "Proxying non-HTTP traffic."
+    children:
+      - id: thick_proxy_setup
+        type: checklist
+        title: Intercepting Traffic
+        content: |
+          - [ ] Use `Burp Suite` with invisible proxying for HTTP.
+          - [ ] Use `Echo Mirage` or `Wireshark` for non-HTTP traffic.
+          - [ ] Check for missing SSL/TLS or certificate validation.

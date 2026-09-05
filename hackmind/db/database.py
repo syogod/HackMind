@@ -1,5 +1,6 @@
 """
 Database connection and schema management for HackMind.
+Supports SQLCipher encryption.
 
 All data is stored in a single SQLite file:
     ~/HackMind Projects/hackmind.db
@@ -12,11 +13,21 @@ Increment SCHEMA_VERSION and add a (from_version, sql) tuple to MIGRATIONS
 whenever the schema changes.
 """
 
-import sqlite3
+try:
+    from pysqlcipher3 import dbapi2 as sqlite3
+    HAS_SQLCIPHER = True
+except ImportError:
+    try:
+        from sqlcipher3 import dbapi2 as sqlite3
+        HAS_SQLCIPHER = True
+    except ImportError:
+        import sqlite3
+        HAS_SQLCIPHER = False
+
 from pathlib import Path
 from typing import Optional
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 7
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -28,6 +39,7 @@ CREATE TABLE IF NOT EXISTS projects (
     name        TEXT NOT NULL,
     target_name TEXT NOT NULL,
     template_id TEXT NOT NULL,
+    variables   TEXT NOT NULL DEFAULT '{}',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
@@ -85,12 +97,12 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 
 CREATE TABLE IF NOT EXISTS attachments (
-    id         TEXT PRIMARY KEY,
-    node_id    TEXT NOT NULL,
-    filename   TEXT NOT NULL,
-    mime_type  TEXT NOT NULL,
-    data       BLOB NOT NULL,
-    created_at TEXT NOT NULL,
+    id            TEXT PRIMARY KEY,
+    node_id       TEXT NOT NULL,
+    filename      TEXT NOT NULL,
+    mime_type     TEXT NOT NULL,
+    relative_path TEXT NOT NULL,      -- path relative to the project directory
+    created_at    TEXT NOT NULL,
     FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
 """
@@ -105,6 +117,9 @@ CREATE TABLE IF NOT EXISTS project_scope_tags (
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );"""),
     (3, "ALTER TABLE templates ADD COLUMN tier TEXT NOT NULL DEFAULT 'asset';"),
+    (4, "ALTER TABLE projects ADD COLUMN variables TEXT NOT NULL DEFAULT '{}';"),
+    (5, "ALTER TABLE attachments ADD COLUMN relative_path TEXT;"),
+    (6, "ALTER TABLE attachments DROP COLUMN data;"),
 ]
 
 
@@ -125,39 +140,55 @@ def get_default_db_path() -> Path:
 
 class Database:
     """
-    Wrapper around a sqlite3 connection.
+    Wrapper around a sqlite3 connection. Supports SQLCipher encryption.
 
     Normal use (opens the global app database):
-        db = Database.open()
+        db = Database.open(password="...")
 
     Test use (explicit path, won't touch user data):
-        db = Database.open_at(tmp_path / "test.db")
+        db = Database.open_at(tmp_path / "test.db", password="...")
 
     Always call db.close() when done, or use as a context manager:
-        with Database.open() as db:
+        with Database.open(password="...") as db:
             ...
     """
 
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self.conn: sqlite3.Connection = sqlite3.connect(str(path))
+    def __init__(self, path: str | Path, password: Optional[str] = None) -> None:
+        self._path = Path(path)
+        self.conn: sqlite3.Connection = sqlite3.connect(str(self._path))
         self.conn.row_factory = sqlite3.Row
+        
+        if password:
+            if HAS_SQLCIPHER:
+                # Use parameter binding or ensure proper escaping if needed, 
+                # but PRAGMA usually takes a literal.
+                self.conn.execute(f"PRAGMA key = '{password}'")
+            else:
+                print("WARNING: SQLCipher not found. Database is unencrypted.")
+
         self.conn.execute("PRAGMA foreign_keys = ON")
-        self._initialise_schema()
+        
+        try:
+            self._initialise_schema()
+        except sqlite3.DatabaseError as e:
+            # SQLCipher throws this if the key is wrong
+            if "file is not a database" in str(e) or "encrypted" in str(e):
+                raise ValueError("Incorrect password or database is corrupted/unencrypted.") from e
+            raise
 
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
 
     @classmethod
-    def open(cls) -> "Database":
+    def open(cls, password: Optional[str] = None) -> "Database":
         """Open the global app database."""
-        return cls(get_default_db_path())
+        return cls(get_default_db_path(), password=password)
 
     @classmethod
-    def open_at(cls, path: Path) -> "Database":
+    def open_at(cls, path: Path, password: Optional[str] = None) -> "Database":
         """Open a database at an explicit path (for tests)."""
-        return cls(path)
+        return cls(path, password=password)
 
     # ------------------------------------------------------------------
     # Context manager support
@@ -172,12 +203,25 @@ class Database:
     def close(self) -> None:
         self.conn.close()
 
+    @property
+    def attachments_dir(self) -> Path:
+        """Return the directory where external attachments are stored."""
+        # Attachments are stored in a .attachments folder next to the DB
+        path = self._path.parent / ".attachments"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     # ------------------------------------------------------------------
     # Schema initialisation and migration
     # ------------------------------------------------------------------
 
     def _initialise_schema(self) -> None:
-        current = self._get_schema_version()
+        # Check if we can at least query something to verify the key
+        try:
+            current = self._get_schema_version()
+        except sqlite3.DatabaseError:
+            # Re-raise to be caught in __init__
+            raise
 
         if current == 0:
             self.conn.executescript(_CREATE_SCHEMA)

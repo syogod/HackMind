@@ -8,12 +8,14 @@ Layout
 ------
   QSplitter (horizontal)
     ├── TreePanel              (left, fixed min-width)
-    └── QStackedWidget         (centre)
-          ├── page 0: WelcomePanel
-          ├── page 1: QuestionPanel
-          ├── page 2: ChecklistPanel
-          ├── page 3: AssetPanel
-          └── page 4: InfoPanel
+    ├── QStackedWidget         (centre)
+    │   ├── page 0: WelcomePanel
+    │   ├── page 1: ChecklistPanel
+    │   ├── page 2: QuestionPanel
+    │   └── page 3: AssetPanel
+    └── QSplitter (vertical)   (right)
+        ├── InfoPanel
+        └── QTabWidget (Notes / Attachments)
 """
 
 from __future__ import annotations
@@ -26,21 +28,73 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QSplitter,
     QStackedWidget,
+    QProgressBar,
+    QStatusBar,
+    QTabWidget,
 )
-from PyQt6.QtCore import Qt, QByteArray
+from PyQt6.QtCore import Qt, QByteArray, QThread, pyqtSignal
 
 from hackmind.db import node_repo, project_repo, template_repo
 from hackmind.db.database import Database
+
+
+class ExportWorker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str, str) # file_path, result_type
+    error = pyqtSignal(str)
+
+    def __init__(self, db_path: Path, project_id: str, file_path: str, export_type: str, **kwargs) -> None:
+        super().__init__()
+        self.db_path = Path(db_path)
+        self.project_id = project_id
+        self.file_path = file_path
+        self.export_type = export_type
+        self.kwargs = kwargs
+
+    def run(self) -> None:
+        try:
+            db = Database.open_at(self.db_path)
+            try:
+                if self.export_type == "markdown":
+                    from hackmind.engine.report_exporter import generate_markdown_report
+                    self.progress.emit(30)
+                    report_md = generate_markdown_report(db, self.project_id)
+                    self.progress.emit(70)
+                    Path(self.file_path).write_text(report_md, encoding="utf-8")
+                    self.progress.emit(100)
+                    self.finished.emit(self.file_path, "Markdown Report")
+                elif self.export_type == "template":
+                    from hackmind.engine.template_exporter import export_asset_subtree
+                    from hackmind.engine.template_loader import load_template_from_string
+                    self.progress.emit(20)
+                    raw_yaml = export_asset_subtree(
+                        db, self.kwargs["asset_node_id"],
+                        name=self.kwargs["name"],
+                        version=self.kwargs["version"],
+                        author=self.kwargs["author"],
+                        description=self.kwargs["description"]
+                    )
+                    self.progress.emit(60)
+                    template = load_template_from_string(raw_yaml)
+                    template_repo.store_template(db, template, raw_yaml)
+                    self.progress.emit(80)
+                    Path(self.file_path).write_text(raw_yaml, encoding="utf-8")
+                    self.progress.emit(100)
+                    self.finished.emit(self.file_path, "Methodology Template")
+            finally:
+                db.close()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 from hackmind.engine import tree_engine
 from hackmind.engine.template_exporter import (
     bump_version,
-    export_asset_subtree,
     find_primary_template_meta,
 )
 from hackmind.engine.template_loader import (
     TemplateValidationError,
     load_template_from_file,
-    load_template_from_string,
 )
 from hackmind.models.types import NodeType
 from hackmind.ui.app_state import AppState
@@ -56,12 +110,13 @@ from hackmind.ui.panels.question_panel import QuestionPanel
 from hackmind.ui.panels.welcome_panel import WelcomePanel
 from hackmind.ui.themes import THEMES, apply_theme
 from hackmind.ui.tree_panel import TreePanel
+from hackmind.ui.widgets.attachment_pane import AttachmentPane
+from hackmind.ui.widgets.note_editor import NoteEditor
 
 _PAGE_WELCOME   = 0
-_PAGE_QUESTION  = 1
-_PAGE_CHECKLIST = 2
+_PAGE_CHECKLIST = 1
+_PAGE_QUESTION  = 2
 _PAGE_ASSET     = 3
-_PAGE_INFO      = 4
 
 
 class MainWindow(QMainWindow):
@@ -71,34 +126,44 @@ class MainWindow(QMainWindow):
         self._theme_group = None  # set by _build_menu(); kept for _sync_theme_menu()
         self.setWindowTitle("HackMind")
         self.resize(1280, 800)
+        self.setAcceptDrops(True)
         self._build_ui()
         self._build_menu()
         self._restore_geometry()
+        
+        # Status Bar with Progress
+        self._status_bar = QStatusBar()
+        self.setStatusBar(self._status_bar)
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setMaximumWidth(200)
+        self._progress_bar.setVisible(False)
+        self._status_bar.addPermanentWidget(self._progress_bar)
 
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        # Left — tree
+        # 1. Left Pane: Tree
         self._tree_panel = TreePanel()
         self._tree_panel.node_selected.connect(self._on_node_selected)
         self._tree_panel.width_hint_changed.connect(self._on_tree_width_hint)
         self._tree_panel.node_add_requested.connect(self._on_node_add_requested)
         self._tree_panel.export_requested.connect(self._on_export_requested)
 
-        # Centre — stacked panels
-        self._stack = QStackedWidget()
-
+        # 2. Center Pane: Dynamic Checklist/Content
+        # We'll use a stack for the center pane to handle different node types
+        self._center_stack = QStackedWidget()
+        
         self._welcome = WelcomePanel(self._state.db)
         self._welcome.project_opened.connect(self._open_project_by_id)
         self._welcome.new_project_requested.connect(self._new_project)
 
-        self._question_panel = QuestionPanel(self._state)
-        self._question_panel.tree_changed.connect(self._refresh_tree)
-
         self._checklist_panel = ChecklistPanel(self._state.db)
         self._checklist_panel.tree_changed.connect(self._refresh_tree)
+        
+        self._question_panel = QuestionPanel(self._state)
+        self._question_panel.tree_changed.connect(self._refresh_tree)
 
         self._asset_panel = AssetPanel(self._state)
         self._asset_panel.tree_changed.connect(self._refresh_tree)
@@ -106,21 +171,40 @@ class MainWindow(QMainWindow):
         self._asset_panel.node_focus_requested.connect(self._on_node_selected)
         self._asset_panel.node_focus_requested.connect(self._tree_panel.select_node)
 
+        self._center_stack.addWidget(self._welcome)         # 0
+        self._center_stack.addWidget(self._checklist_panel) # 1
+        self._center_stack.addWidget(self._question_panel)  # 2
+        self._center_stack.addWidget(self._asset_panel)     # 3
+
+        # 3. Right Pane: Info (Top) & Tabs (Notes / Attachments) (Bottom)
+        self._right_splitter = QSplitter(Qt.Orientation.Vertical)
+        
         self._info_panel = InfoPanel()
+        
+        self._tab_widget = QTabWidget()
+        self._note_editor = NoteEditor(self._state.db)
+        self._attachment_pane = AttachmentPane(self._state.db)
+        self._tab_widget.addTab(self._note_editor, "Notes")
+        self._tab_widget.addTab(self._attachment_pane, "Attachments")
+        
+        self._right_splitter.addWidget(self._info_panel)
+        self._right_splitter.addWidget(self._tab_widget)
+        self._right_splitter.setStretchFactor(0, 1)
+        self._right_splitter.setStretchFactor(1, 2)
 
-        self._stack.addWidget(self._welcome)         # 0
-        self._stack.addWidget(self._question_panel)  # 1
-        self._stack.addWidget(self._checklist_panel) # 2
-        self._stack.addWidget(self._asset_panel)     # 3
-        self._stack.addWidget(self._info_panel)      # 4
+        # Main Layout: Three Panes
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._main_splitter.addWidget(self._tree_panel)
+        self._main_splitter.addWidget(self._center_stack)
+        self._main_splitter.addWidget(self._right_splitter)
+        
+        self._main_splitter.setStretchFactor(0, 1)
+        self._main_splitter.setStretchFactor(1, 2)
+        self._main_splitter.setStretchFactor(2, 1)
+        self._main_splitter.setStretchFactor(1, 2)
+        self._main_splitter.setStretchFactor(2, 1)
 
-        self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._splitter.addWidget(self._tree_panel)
-        self._splitter.addWidget(self._stack)
-        self._splitter.setStretchFactor(0, 1)
-        self._splitter.setStretchFactor(1, 3)
-
-        self.setCentralWidget(self._splitter)
+        self.setCentralWidget(self._main_splitter)
         self._show_welcome()
 
     def _build_menu(self) -> None:
@@ -137,6 +221,9 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(action("&New Project…",      self._new_project,        "Ctrl+N"))
         file_menu.addAction(action("&Close Project",     self._close_project))
+        file_menu.addSeparator()
+        file_menu.addAction(action("&Import Targets (Text File)…", self._import_targets))
+        file_menu.addAction(action("&Export Report (Markdown)…", self._export_report, "Ctrl+E"))
         file_menu.addSeparator()
         file_menu.addAction(action("&Import Template…",  self._import_template))
         file_menu.addAction(action("&Template Editor…",  self._open_template_editor))
@@ -199,6 +286,7 @@ class MainWindow(QMainWindow):
             return
         self._checklist_panel.flush()
         self._asset_panel.flush()
+        self._note_editor.flush()
         self._state.project = None
         self._tree_panel.clear()
         self._show_welcome()
@@ -210,7 +298,112 @@ class MainWindow(QMainWindow):
             f"HackMind — {self._state.project.name} [{self._state.project.target_name}]"
         )
         self._tree_panel.load(self._state.db, self._state.project.id)
-        self._stack.setCurrentIndex(_PAGE_WELCOME)
+        self._center_stack.setCurrentIndex(_PAGE_WELCOME)
+
+    def _export_report(self) -> None:
+        if self._state.project is None:
+            QMessageBox.warning(self, "No Project", "Please open a project first.")
+            return
+
+        save_file, _ = QFileDialog.getSaveFileName(
+            self, "Export Markdown Report", f"{self._state.project.name}_Report.md",
+            "Markdown files (*.md *.markdown)"
+        )
+        if not save_file:
+            return
+
+        self._progress_bar.setValue(0)
+        self._progress_bar.setVisible(True)
+        self._status_bar.showMessage("Exporting report...")
+
+        self._export_worker = ExportWorker(self._state.db._path, self._state.project.id, save_file, "markdown")
+        self._export_worker.progress.connect(self._progress_bar.setValue)
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.error.connect(self._on_export_error)
+        self._export_worker.start()
+
+    def _on_export_finished(self, file_path: str, export_type: str) -> None:
+        self._progress_bar.setVisible(False)
+        self._status_bar.showMessage(f"{export_type} exported successfully.", 5000)
+        QMessageBox.information(self, "Export Successful", f"{export_type} saved to:\n{file_path}")
+
+    def _on_export_error(self, error_msg: str) -> None:
+        self._progress_bar.setVisible(False)
+        self._status_bar.showMessage("Export failed.", 5000)
+        QMessageBox.critical(self, "Export Failed", f"An error occurred during export:\n{error_msg}")
+
+    # Global Drag and Drop
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        current_node_id = self._tree_panel._current_node_id()
+        if not current_node_id:
+            return
+
+        from hackmind.db import attachment_repo
+        from hackmind.models.types import Attachment
+        import mimetypes
+        from pathlib import Path
+
+        for url in event.mimeData().urls():
+            file_path = Path(url.toLocalFile())
+            if file_path.is_file():
+                data = file_path.read_bytes()
+                mime_type, _ = mimetypes.guess_type(str(file_path))
+                att = Attachment(
+                    node_id=current_node_id,
+                    filename=file_path.name,
+                    mime_type=mime_type or "application/octet-stream",
+                    data=data
+                )
+                attachment_repo.insert_attachment(self._state.db, att)
+        
+        self._refresh_tree()
+        self._on_node_selected(current_node_id)
+        self._attachment_pane.load(current_node_id)
+        event.acceptProposedAction()
+
+    def _import_targets(self) -> None:
+        if self._state.project is None:
+            QMessageBox.warning(self, "No Project", "Please open a project first.")
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Targets", "", "Text files (*.txt);;All files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            content = Path(path).read_text(encoding="utf-8")
+            lines = [line.strip() for line in content.splitlines() if line.strip()]
+            if not lines:
+                return
+
+            # Add each line as a new asset under the project root
+            # First find project root
+            root = next(
+                (n for n in node_repo.get_project_nodes(self._state.db, self._state.project.id)
+                 if n.parent_id is None),
+                None,
+            )
+            if not root:
+                return
+
+            for line in lines:
+                tree_engine.add_asset(
+                    self._state.db,
+                    self._state.project.id,
+                    root.id,
+                    line,
+                )
+            
+            self._refresh_tree()
+            QMessageBox.information(self, "Imported", f"Imported {len(lines)} targets.")
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Failed", f"Could not import targets:\n{str(exc)}")
 
     # ------------------------------------------------------------------
     # Node selection
@@ -221,22 +414,27 @@ class MainWindow(QMainWindow):
         if node is None:
             return
 
+        # Right pane always updates
+        self._info_panel.load(node)
+        self._note_editor.load(node.id)
+        self._attachment_pane.load(node.id)
+
+        # Center pane updates based on type
         if node.type == NodeType.QUESTION:
             self._question_panel.load(node)
-            self._stack.setCurrentIndex(_PAGE_QUESTION)
+            self._center_stack.setCurrentIndex(_PAGE_QUESTION)
 
         elif node.type == NodeType.CHECKLIST:
             self._checklist_panel.flush()
             self._checklist_panel.load(node)
-            self._stack.setCurrentIndex(_PAGE_CHECKLIST)
+            self._center_stack.setCurrentIndex(_PAGE_CHECKLIST)
 
         elif node.type == NodeType.ASSET:
             self._asset_panel.load(node)
-            self._stack.setCurrentIndex(_PAGE_ASSET)
+            self._center_stack.setCurrentIndex(_PAGE_ASSET)
 
         elif node.type == NodeType.INFO:
-            self._info_panel.load(node)
-            self._stack.setCurrentIndex(_PAGE_INFO)
+            self._center_stack.setCurrentIndex(_PAGE_WELCOME)
 
     # ------------------------------------------------------------------
     # Tree refresh
@@ -249,7 +447,7 @@ class MainWindow(QMainWindow):
 
     def _on_asset_deleted(self) -> None:
         self._refresh_tree()
-        self._stack.setCurrentIndex(_PAGE_WELCOME)
+        self._center_stack.setCurrentIndex(_PAGE_WELCOME)
 
     # ------------------------------------------------------------------
     # Template import
@@ -313,7 +511,7 @@ class MainWindow(QMainWindow):
         meta = find_primary_template_meta(self._state.db, asset_node_id)
         suggested_name    = meta["name"]    if meta else self._state.project.target_name
         suggested_version = bump_version(meta["version"]) if meta else "1.0.0"
-        suggested_author  = meta["name"]    if meta else ""
+        suggested_author  = meta.get("author", "") if meta else ""
 
         dialog = ExportTemplateDialog(
             suggested_name=suggested_name,
@@ -324,37 +522,30 @@ class MainWindow(QMainWindow):
         if dialog.exec() != ExportTemplateDialog.DialogCode.Accepted:
             return
 
-        raw_yaml = export_asset_subtree(
-            self._state.db,
-            asset_node_id,
-            name=dialog.result_name,
-            version=dialog.result_version,
-            author=dialog.result_author,
-            description=dialog.result_description,
-        )
-
-        try:
-            template = load_template_from_string(raw_yaml)
-        except TemplateValidationError as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
-            return
-
-        template_repo.store_template(self._state.db, template, raw_yaml)
-        self._welcome.refresh()
-
         save_file, _ = QFileDialog.getSaveFileName(
             self, "Save Template File", f"{dialog.result_name}.yaml",
             "YAML files (*.yaml *.yml)"
         )
-        if save_file:
-            from pathlib import Path
-            Path(save_file).write_text(raw_yaml, encoding="utf-8")
+        if not save_file:
+            return
 
-        QMessageBox.information(
-            self, "Template Exported",
-            f"'{dialog.result_name}' v{dialog.result_version} saved to library."
-            + (f"\nFile: {save_file}" if save_file else ""),
+        self._progress_bar.setValue(0)
+        self._progress_bar.setVisible(True)
+        self._status_bar.showMessage("Exporting template...")
+
+        self._export_worker = ExportWorker(
+            self._state.db._path, self._state.project.id, save_file, "template",
+            asset_node_id=asset_node_id,
+            name=dialog.result_name,
+            version=dialog.result_version,
+            author=dialog.result_author,
+            description=dialog.result_description
         )
+        self._export_worker.progress.connect(self._progress_bar.setValue)
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.finished.connect(lambda: self._welcome.refresh())
+        self._export_worker.error.connect(self._on_export_error)
+        self._export_worker.start()
 
     # ------------------------------------------------------------------
     # Settings
@@ -418,11 +609,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_tree_width_hint(self, width: int) -> None:
-        total = sum(self._splitter.sizes())
-        if total > 0:
-            self._splitter.setSizes([width, total - width])
+        sizes = self._main_splitter.sizes()
+        if len(sizes) == 3:
+            remaining = sum(sizes) - width
+            center = int(remaining * 2 / 3)
+            right = remaining - center
+            self._main_splitter.setSizes([width, center, right])
+        elif len(sizes) == 2:
+            self._main_splitter.setSizes([width, sum(sizes) - width])
 
     def _show_welcome(self) -> None:
         self._welcome.refresh()
-        self._stack.setCurrentIndex(_PAGE_WELCOME)
+        self._center_stack.setCurrentIndex(_PAGE_WELCOME)
         self.setWindowTitle("HackMind")

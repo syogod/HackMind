@@ -50,29 +50,29 @@ nodes:
     children:
       - id: recon_scope
         type: checklist
-        title: "Define scope and collect seed assets"
+        title: "Define scope and collect seed assets for {{target_name}}"
         content: |
-          Before anything else, clearly define what is in scope.
+          Before anything else, clearly define what is in scope for {{target_name}}.
           - Read the program policy / rules of engagement
           - List all in-scope domains, subdomains, IPs, and ASNs
           - Note any explicitly out-of-scope assets (third-party, CDNs, etc.)
           - Record the target organisation name and known ASNs:
-            whois <domain> | grep -i "org\|asn"
-            amass intel -org "Target Corp"
+            whois {{target_name}} | grep -i "org\|asn"
+            amass intel -org "{{target_name}}"
 
       - id: recon_subdomain
         type: checklist
         title: "Subdomain Enumeration"
         content: |
           Passive (no direct contact):
-          - crt.sh / cert.sh: https://crt.sh/?q=%25.target.com
-          - subfinder -d target.com -all -recursive
-          - amass enum -passive -d target.com
-          - assetfinder --subs-only target.com
+          - crt.sh / cert.sh: https://crt.sh/?q=%25.{{target_name}}
+          - subfinder -d {{target_name}} -all -recursive
+          - amass enum -passive -d {{target_name}}
+          - assetfinder --subs-only {{target_name}}
           - GitHub, Shodan, VirusTotal, SecurityTrails, Chaos (chaos.projectdiscovery.io)
 
           Active (DNS brute-force):
-          - puredns brute all.txt target.com -r resolvers.txt
+          - puredns brute all.txt {{target_name}} -r resolvers.txt
           - dnsx -l subdomains.txt -a -cname -resp
 
           Post-enumeration:
@@ -82,19 +82,19 @@ nodes:
 
       - id: recon_google_dorks
         type: checklist
-        title: "Google dorking and OSINT"
+        title: "Google dorking and OSINT for {{target_name}}"
         content: |
           Use Google / Bing / DuckDuckGo with operators:
-          - site:target.com filetype:pdf OR filetype:xlsx OR filetype:docx
-          - site:target.com inurl:admin OR inurl:login OR inurl:dashboard
-          - site:target.com "index of /" OR "directory listing"
-          - site:target.com ext:sql OR ext:log OR ext:bak OR ext:env
-          - "target.com" "api_key" OR "secret" OR "password" site:github.com
-          - intitle:"500 Internal Server Error" site:target.com
+          - site:{{target_name}} filetype:pdf OR filetype:xlsx OR filetype:docx
+          - site:{{target_name}} inurl:admin OR inurl:login OR inurl:dashboard
+          - site:{{target_name}} "index of /" OR "directory listing"
+          - site:{{target_name}} ext:sql OR ext:log OR ext:bak OR ext:env
+          - "{{target_name}}" "api_key" OR "secret" OR "password" site:github.com
+          - intitle:"500 Internal Server Error" site:{{target_name}}
 
           Other OSINT:
-          - Shodan: hostname:target.com / org:"Target Corp"
-          - Censys: parsed.names: target.com
+          - Shodan: hostname:{{target_name}} / org:"{{target_name}}"
+          - Censys: parsed.names: {{target_name}}
           - FOFA / ZoomEye / Netlas for additional asset discovery
           - https://leakix.net - data breach search
 
@@ -106,11 +106,11 @@ nodes:
           Tools: trufflehog, gitleaks, gitrob, gh-dork
 
           Manual searches:
-          - github.com/search?q="target.com"+password
-          - github.com/search?q="target.com"+api_key
-          - github.com/search?q="target.com"+secret
-          - github.com/search?q=target.com+filename:.env
-          - github.com/search?q=target.com+filename:config.yml
+          - github.com/search?q="{{target_name}}"+password
+          - github.com/search?q="{{target_name}}"+api_key
+          - github.com/search?q="{{target_name}}"+secret
+          - github.com/search?q={{target_name}}+filename:.env
+          - github.com/search?q={{target_name}}+filename:config.yml
 
           If source repo found:
           - trufflehog git <repo_url> --only-verified
@@ -123,8 +123,8 @@ nodes:
         title: "Historical URL and parameter analysis"
         content: |
           Mine archived versions for old endpoints, parameters, and JS:
-          - waybackurls target.com | tee wayback.txt
-          - gau target.com --mc 200 | tee gau.txt
+          - waybackurls {{target_name}} | tee wayback.txt
+          - gau {{target_name}} --mc 200 | tee gau.txt
           - cat wayback.txt gau.txt | unfurl paths | sort -u
 
           Look for:
@@ -133,16 +133,16 @@ nodes:
           - Old API versions (v1, v2) still alive
           - Previously exposed files (backups, configs)
 
-          katana -u https://target.com -depth 5 -jc -kf all -d 5 -o katana.txt
+          katana -u {{target_url}} -depth 5 -jc -kf all -d 5 -o katana.txt
 
       - id: recon_tech_fingerprint
         type: checklist
         title: "Technology Fingerprinting"
         content: |
           Identify the full tech stack:
-          - whatweb -a 3 https://target.com
+          - whatweb -a 3 {{target_url}}
           - Wappalyzer browser extension
-          - httpx -u https://target.com -tech-detect -title -status-code
+          - httpx -u {{target_url}} -tech-detect -title -status-code
 
           HTTP headers to inspect:
           - Server: nginx/1.18 -> version disclosure
@@ -164,8 +164,8 @@ nodes:
         title: "Content & directory discovery"
         content: |
           Enumerate paths, files, and hidden endpoints:
-          - ffuf -u https://target.com/FUZZ -w /opt/SecLists/Discovery/Web-Content/raft-large-words.txt -mc 200,201,204,301,302,403 -o ffuf.json
-          - feroxbuster -u https://target.com -w /opt/SecLists/Discovery/Web-Content/common.txt --depth 3 --auto-tune
+          - ffuf -u {{target_url}}/FUZZ -w /opt/SecLists/Discovery/Web-Content/raft-large-words.txt -mc 200,201,204,301,302,403 -o ffuf.json
+          - feroxbuster -u {{target_url}} -w /opt/SecLists/Discovery/Web-Content/common.txt --depth 3 --auto-tune
 
           High-value targets:
           - /.git/HEAD, /.git/config, /.svn/entries
