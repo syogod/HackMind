@@ -205,6 +205,11 @@ class MainWindow(QMainWindow):
                 _settings.KEY_RIGHT_SPLITTER, self._work_splitter.sizes()
             )
         )
+        # Keep both halves usable when the window is narrow.
+        self._note_editor.setMinimumWidth(240)
+        self._attachment_pane.setMinimumWidth(200)
+        # Info (metadata) pane should stay compact; give the work area the rest.
+        self._right_splitter.setSizes([190, 480])
         
         self._right_splitter.addWidget(self._info_panel)
         self._right_splitter.addWidget(self._work_splitter)
@@ -220,11 +225,31 @@ class MainWindow(QMainWindow):
         self._main_splitter.setStretchFactor(0, 1)
         self._main_splitter.setStretchFactor(1, 2)
         self._main_splitter.setStretchFactor(2, 1)
-        self._main_splitter.setStretchFactor(1, 2)
-        self._main_splitter.setStretchFactor(2, 1)
+        self._main_splitter.splitterMoved.connect(
+            lambda _pos, _idx: (
+                setattr(self, "_main_sizes_custom", True),
+                _settings.set_sizes(
+                    _settings.KEY_MAIN_SPLITTER, self._main_splitter.sizes()
+                ),
+            )
+        )
+        self._right_splitter.setMinimumWidth(380)
+        # Splitter sizes are applied once AFTER first show — applying them
+        # earlier gets overridden by Qt's stretch-factor distribution.
+        self._splitter_sizes_applied = False
 
         self.setCentralWidget(self._main_splitter)
         self._show_welcome()
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if not self._splitter_sizes_applied:
+            from hackmind import settings as _settings
+            self._splitter_sizes_applied = True
+            saved_main = _settings.get_sizes(_settings.KEY_MAIN_SPLITTER)
+            self._main_splitter.setSizes(saved_main or [420, 620, 560])
+            self._right_splitter.setSizes([190, 480])
+            self._work_splitter.setSizes(_settings.get_sizes(_settings.KEY_RIGHT_SPLITTER) or [300, 220])
 
     def _build_menu(self) -> None:
         from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
@@ -637,10 +662,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_tree_width_hint(self, width: int) -> None:
+        # Once the user has manually sized the panes, respect their layout —
+        # auto-fitting the tree pane would keep clobbering it.
+        if getattr(self, "_main_sizes_custom", False):
+            return
         sizes = self._main_splitter.sizes()
         if len(sizes) == 3:
             remaining = sum(sizes) - width
-            center = int(remaining * 2 / 3)
+            # Detail (notes/attachments) needs real width — give it ~45% of
+            # what's left after the tree pane.
+            center = int(remaining * 0.55)
             right = remaining - center
             self._main_splitter.setSizes([width, center, right])
         elif len(sizes) == 2:

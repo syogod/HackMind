@@ -9,6 +9,8 @@ so changes made in the Settings dialog take effect immediately.
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QPushButton,
     QTextEdit,
     QTextBrowser,
     QVBoxLayout,
@@ -40,8 +42,24 @@ class NoteEditor(QWidget):
 
         self._preview = QTextBrowser()
         self._preview.setOpenExternalLinks(True)
-        # Add basic CSS for markdown preview
         self._preview.setHtml("<em>Preview area</em>")
+
+        # Preview is OFF by default — it halves the writing space. Toggle it on
+        # for rendering Markdown; the choice is persisted.
+        from hackmind import settings as _settings
+        self._preview_toggle = QPushButton("◐ Preview")
+        self._preview_toggle.setCheckable(True)
+        self._preview_toggle.setFixedHeight(22)
+        self._preview_toggle.setToolTip("Toggle the live Markdown preview pane")
+        self._preview_toggle.setChecked(
+            _settings.get_flag(_settings.KEY_NOTE_PREVIEW, False)
+        )
+        self._preview_toggle.toggled.connect(self._on_preview_toggled)
+
+        toggle_row = QHBoxLayout()
+        toggle_row.setContentsMargins(0, 0, 0, 0)
+        toggle_row.addStretch()
+        toggle_row.addWidget(self._preview_toggle)
 
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.addWidget(self._editor)
@@ -51,7 +69,10 @@ class NoteEditor(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addLayout(toggle_row)
         layout.addWidget(self._splitter)
+        self._on_preview_toggled(self._preview_toggle.isChecked())
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -60,6 +81,14 @@ class NoteEditor(QWidget):
         self._render_timer = QTimer(self)
         self._render_timer.setSingleShot(True)
         self._render_timer.timeout.connect(self._render_preview)
+
+    def _on_preview_toggled(self, visible: bool) -> None:
+        from hackmind import settings as _settings
+        self._preview.setVisible(visible)
+        if visible:
+            self._splitter.setSizes([1, 1])
+            self._render_preview()
+        _settings.set_flag(_settings.KEY_NOTE_PREVIEW, visible)
 
     def load(self, node_id: str) -> None:
         """Load the note for the given node, replacing the editor content."""

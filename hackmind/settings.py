@@ -95,7 +95,9 @@ def set_base_font_size(px: int) -> None:
 
 KEY_CHECKLIST_GUIDANCE = "ui/checklist_guidance_expanded"
 KEY_RIGHT_SPLITTER = "ui/right_splitter_sizes"
+KEY_MAIN_SPLITTER = "ui/main_splitter_sizes"
 KEY_TREE_FILTER = "ui/tree_filter_mode"
+KEY_NOTE_PREVIEW = "ui/note_preview_visible"
 
 
 def get_flag(key: str, default: bool) -> bool:
