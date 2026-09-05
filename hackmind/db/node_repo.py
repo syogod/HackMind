@@ -238,6 +238,39 @@ def set_finding(db: Database, node_id: str, is_finding: bool) -> None:
         )
 
 
+# Severity levels recognised by the report exporter, stored as scope tags.
+SEVERITY_TAGS = ("critical", "high", "medium", "low", "info")
+
+
+def set_severity(db: Database, node_id: str, severity: str) -> None:
+    """
+    Set a node's severity, managed as a scope tag.
+
+    Replaces any existing severity tag with the new one, leaving all other
+    scope tags untouched. Valid severities: critical, high, medium, low, info.
+    """
+    sev = severity.lower().strip()
+    if sev not in SEVERITY_TAGS:
+        raise ValueError(f"Invalid severity '{severity}'. Expected one of: {SEVERITY_TAGS}")
+
+    row = db.conn.execute(
+        "SELECT scope_tags FROM nodes WHERE id = ?", (node_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Node '{node_id}' not found.")
+
+    tags = [
+        t for t in json.loads(row["scope_tags"] or "[]")
+        if t.lower() not in SEVERITY_TAGS
+    ]
+    tags.append(sev)
+    with db.conn:
+        db.conn.execute(
+            "UPDATE nodes SET scope_tags = ? WHERE id = ?",
+            (json.dumps(tags), node_id),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Soft-delete / restore subtrees
 # ---------------------------------------------------------------------------

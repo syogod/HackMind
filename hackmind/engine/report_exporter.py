@@ -61,26 +61,30 @@ def generate_markdown_report(
     report.append(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     report.append("\n---\n")
 
+    # Order findings by severity (critical first) for a professional layout.
+    severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+    def _node_severity(node) -> str:
+        for tag in node.scope_tags:
+            if tag.lower() in severity_rank:
+                return tag.lower()
+        return "info"
+
+    findings.sort(key=lambda n: severity_rank[_node_severity(n)])
+
     # 1. Executive Summary
     report.append("## 1. Executive Summary")
     report.append(f"Total Findings Identified: **{len(findings)}**")
     report.append("\n### Findings by Severity")
     
-    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    severity_counts = {s: 0 for s in severity_rank}
     for f in findings:
-        found_severity = False
-        for tag in f.scope_tags:
-            tag_lower = tag.lower()
-            if tag_lower in severity_counts:
-                severity_counts[tag_lower] += 1
-                found_severity = True
-                break
-        if not found_severity:
-            severity_counts["info"] += 1
+        severity_counts[_node_severity(f)] += 1
             
     report.append("| Severity | Count |")
     report.append("| :--- | :--- |")
-    for sev, count in severity_counts.items():
+    for sev in ("critical", "high", "medium", "low", "info"):
+        count = severity_counts[sev]
         if count > 0:
             report.append(f"| {sev.capitalize()} | {count} |")
     
@@ -92,16 +96,9 @@ def generate_markdown_report(
     if not findings:
         report.append("_No findings identified._")
     else:
-        for f in findings:
-            # 3. Content Rendering
-            report.append(f"### {f.title}")
-            
-            # Severity Tag
-            severity = "Info"
-            for tag in f.scope_tags:
-                if tag.lower() in severity_counts:
-                    severity = tag.capitalize()
-                    break
+        for i, f in enumerate(findings, start=1):
+            severity = _node_severity(f).capitalize()
+            report.append(f"### F-{i:02d} — {f.title}")
             report.append(f"**Severity:** {severity}")
             
             # Note content

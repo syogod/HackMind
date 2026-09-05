@@ -610,8 +610,12 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(QByteArray(raw))
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        """Save window geometry before closing so it can be restored next launch."""
+        """Flush pending edits and save window geometry before closing."""
         from hackmind import settings as _settings
+        # Flush any pending note edits so typing right before quitting isn't lost.
+        self._checklist_panel.flush()
+        self._asset_panel.flush()
+        self._note_editor.flush()
         _settings.save_geometry(bytes(self.saveGeometry()))
         super().closeEvent(event)
 

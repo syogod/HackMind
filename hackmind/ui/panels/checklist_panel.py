@@ -159,8 +159,22 @@ class ChecklistPanel(QWidget):
         finding_check.setChecked(node.is_finding)
         finding_check.toggled.connect(lambda checked, n=node: self._on_row_finding_toggled(n, checked))
         
+        severity_combo = QComboBox()
+        for sev in ("info", "low", "medium", "high", "critical"):
+            severity_combo.addItem(sev.capitalize(), userData=sev)
+        current_sev = next(
+            (t for t in node.scope_tags if t.lower() in node_repo.SEVERITY_TAGS), "info"
+        )
+        sev_idx = severity_combo.findData(current_sev)
+        severity_combo.setCurrentIndex(sev_idx if sev_idx >= 0 else 0)
+        severity_combo.setToolTip("Finding severity (used in the exported report)")
+        severity_combo.currentIndexChanged.connect(
+            lambda idx, n=node, cb=severity_combo: self._on_row_severity_changed(n, cb.currentData())
+        )
+        
         row_layout.addWidget(status_check)
         row_layout.addWidget(title_label, stretch=1)
+        row_layout.addWidget(severity_combo)
         row_layout.addWidget(status_combo)
         row_layout.addWidget(finding_check)
         
@@ -205,6 +219,14 @@ class ChecklistPanel(QWidget):
         if self._loading: return
         node_repo.set_finding(self._db, node.id, checked)
         node.is_finding = checked
+
+    def _on_row_severity_changed(self, node: Node, severity: str) -> None:
+        if self._loading or severity is None: return
+        node_repo.set_severity(self._db, node.id, severity)
+        # Keep the in-memory node's tags in sync (replace severity tag).
+        node.scope_tags = [
+            t for t in node.scope_tags if t.lower() not in node_repo.SEVERITY_TAGS
+        ] + [severity]
         self.tree_changed.emit()
 
     def flush(self) -> None:
