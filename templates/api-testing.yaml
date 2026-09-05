@@ -1,5 +1,5 @@
 name: "API Security Testing"
-version: "2.1.0"
+version: "2.2.0"
 author: "HackMind"
 tier: asset
 description: >
@@ -77,6 +77,7 @@ nodes:
             $.ajax(), and URL string literals
           - Look for /api/ patterns and versioned prefixes (/v1/, /v2/)
           - Extract endpoints from mobile app binaries and decompiled sources
+          - Automated route brute-force: kiterunner (`kr scan https://{{target_name}}/api/ -w routes-large.kite`)
           - Note every base path and version prefix — old versions often survive
 
       - id: recon_methods
@@ -232,6 +233,19 @@ nodes:
             (isAdmin, role, access_level, id) and confirm the privilege took hold.
           - For XML-backed requests, break out of the element and inject nodes;
             if an XML parser is reachable, pivot to XXE (see the XML branch).
+
+      - id: nosql_injection
+        type: checklist
+        title: "NoSQL Injection (JSON bodies)"
+        scope_tags: [critical, injection, nosql]
+        content: |
+          Test JSON login and filter bodies for MongoDB / CouchDB operator injection:
+          - {"username": {"$ne": null}, "password": {"$ne": null}}
+          - {"username": "admin", "password": {"$gt": ""}}
+          - {"username": {"$regex": "^a"}, "password": {"$ne": ""}}  (blind extraction)
+          - {"$where": "sleep(5000)"}  (time-based confirmation)
+          - Try URL-encoded operators too: username[$ne]=null&password[$ne]=null
+          - Test in registration, password reset, and search/filter endpoints.
 
   # ===========================================================================
   # OWASP API SECURITY TOP 10 (2023)
@@ -543,6 +557,8 @@ nodes:
               - Abuse pagination/query limits: page size, limit=, ?fields= to force
                 huge responses; unbounded arrays or deep JSON as input.
               - Expensive operations (search, export, report) without throttling.
+              - Long string inputs / complex regexes to trigger ReDoS
+                (e.g. `(a+)+$` against a naive matcher).
               - Actions that cost money/quota (send SMS, email, push) with no cap.
           - id: api4_race
             type: checklist

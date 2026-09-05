@@ -1,5 +1,5 @@
 name: "Network Service"
-version: "1.0.0"
+version: "1.1.0"
 author: "HackMind"
 tier: asset
 description: >
@@ -171,7 +171,7 @@ nodes:
             title: "SMTP checks"
             content: |
               - Banner/version -> CVEs (Exim, Postfix, Sendmail)
-              - Open relay test: swaks --to ext@evil.com --from x@target.com --server <IP>
+              - Open relay test: swaks --to ext@evil.com --from x@{{target_name}} --server <IP>
                 (or manual MAIL FROM / RCPT TO to an external domain)
               - User enumeration: smtp-user-enum -M VRFY -U users.txt -t <IP>
                 (also try EXPN and RCPT TO)
