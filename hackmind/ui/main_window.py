@@ -150,6 +150,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        from hackmind import settings as _settings
+
         # 1. Left Pane: Tree
         self._tree_panel = TreePanel()
         self._tree_panel.node_selected.connect(self._on_node_selected)
@@ -182,19 +184,30 @@ class MainWindow(QMainWindow):
         self._center_stack.addWidget(self._question_panel)  # 2
         self._center_stack.addWidget(self._asset_panel)     # 3
 
-        # 3. Right Pane: Info (Top) & Tabs (Notes / Attachments) (Bottom)
+        # 3. Right Pane: Info (Top) & Notes | Attachments side-by-side (Bottom)
         self._right_splitter = QSplitter(Qt.Orientation.Vertical)
         
         self._info_panel = InfoPanel()
         
-        self._tab_widget = QTabWidget()
+        # Notes and attachments side-by-side so neither is buried behind a tab.
+        self._work_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._note_editor = NoteEditor(self._state.db)
         self._attachment_pane = AttachmentPane(self._state.db)
-        self._tab_widget.addTab(self._note_editor, "Notes")
-        self._tab_widget.addTab(self._attachment_pane, "Attachments")
+        self._work_splitter.addWidget(self._note_editor)
+        self._work_splitter.addWidget(self._attachment_pane)
+        self._work_splitter.setStretchFactor(0, 3)   # Notes slightly wider
+        self._work_splitter.setStretchFactor(1, 2)
+        saved_sizes = _settings.get_sizes(_settings.KEY_RIGHT_SPLITTER)
+        if saved_sizes and len(saved_sizes) == 2:
+            self._work_splitter.setSizes(saved_sizes)
+        self._work_splitter.splitterMoved.connect(
+            lambda _pos, _idx: _settings.set_sizes(
+                _settings.KEY_RIGHT_SPLITTER, self._work_splitter.sizes()
+            )
+        )
         
         self._right_splitter.addWidget(self._info_panel)
-        self._right_splitter.addWidget(self._tab_widget)
+        self._right_splitter.addWidget(self._work_splitter)
         self._right_splitter.setStretchFactor(0, 1)
         self._right_splitter.setStretchFactor(1, 2)
 

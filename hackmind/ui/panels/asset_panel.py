@@ -24,10 +24,9 @@ from PyQt6.QtWidgets import (
 from hackmind.ui.themes import title_point_size
 from hackmind.db import node_repo, template_repo
 from hackmind.engine import tree_engine
-from hackmind.models.types import Node
+from hackmind.models.types import Node, NodeStatus
 from hackmind.ui.app_state import AppState
 from hackmind.ui.version_utils import group_by_name, latest_per_name
-from hackmind.ui.widgets.note_editor import NoteEditor
 
 
 class AssetPanel(QWidget):
@@ -73,11 +72,9 @@ class AssetPanel(QWidget):
         add_layout = QVBoxLayout(add_group)
         add_layout.addLayout(form)
 
-        # Notes
-        notes_group = QGroupBox("Notes")
-        self._note_editor = NoteEditor(state.db)
-        notes_layout = QVBoxLayout(notes_group)
-        notes_layout.addWidget(self._note_editor)
+        # Summary line — child asset / progress overview
+        self._summary = QLabel()
+        self._summary.setObjectName("mutedLabel")
 
         # Delete button
         self._delete_btn = QPushButton("Delete Asset")
@@ -92,18 +89,30 @@ class AssetPanel(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         layout.addWidget(self._title)
+        layout.addWidget(self._summary)
         layout.addWidget(add_group)
-        layout.addWidget(notes_group, stretch=1)
+        layout.addStretch()
         layout.addLayout(delete_row)
 
     def load(self, node: Node) -> None:
         self._node = node
         self._title.setText(node.title)
         self._name_input.clear()
-        self._note_editor.load(node.id)
         self._refresh_template_combo()
         # "Target Scope" is the project root — don't allow deleting it
         self._delete_btn.setVisible(node.parent_id is not None)
+        children = node_repo.get_children(self._state.db, node.id)
+        n_children = len(children)
+        remaining = sum(
+            1 for c in children
+            if c.type.value == "checklist"
+            and c.status not in (NodeStatus.COMPLETE, NodeStatus.VULNERABLE, NodeStatus.NOT_APPLICABLE)
+        )
+        parts = [f"{n_children} sub-node{'s' if n_children != 1 else ''}"]
+        if remaining:
+            parts.append(f"{remaining} checks remaining")
+        self._summary.setText(" · ".join(parts))
+        # Notes and attachments are shown in the right pane (single shared editor).
 
     def _refresh_template_combo(self) -> None:
         previous_id = self._template_combo.currentData()
@@ -134,7 +143,7 @@ class AssetPanel(QWidget):
                 self._template_combo.setCurrentIndex(idx)
 
     def flush(self) -> None:
-        self._note_editor.flush()
+        pass  # No editors here — notes live in the right pane.
 
     def _add_asset(self) -> None:
         if self._node is None:

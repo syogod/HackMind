@@ -91,6 +91,41 @@ def set_base_font_size(px: int) -> None:
     _qs().setValue(KEY_FONT_SIZE, int(px))
 
 
+# ── Misc UI state flags ───────────────────────────────────────────────────────
+
+KEY_CHECKLIST_GUIDANCE = "ui/checklist_guidance_expanded"
+KEY_RIGHT_SPLITTER = "ui/right_splitter_sizes"
+
+
+def get_flag(key: str, default: bool) -> bool:
+    """Read a boolean UI-state flag (e.g. collapsible sections)."""
+    raw = _qs().value(key, default)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).lower() in ("1", "true", "yes")
+
+
+def set_flag(key: str, value: bool) -> None:
+    """Persist a boolean UI-state flag."""
+    _qs().setValue(key, value)
+
+
+def get_sizes(key: str) -> list[int] | None:
+    """Read a persisted splitter size list, or None."""
+    raw = _qs().value(key)
+    if raw is None:
+        return None
+    try:
+        return [int(x) for x in raw.split(",")]
+    except (AttributeError, ValueError):
+        return None
+
+
+def set_sizes(key: str, sizes: list[int]) -> None:
+    """Persist a splitter size list."""
+    _qs().setValue(key, ",".join(str(s) for s in sizes))
+
+
 # ── Database path ─────────────────────────────────────────────────────────────
 
 def db_path() -> Path:

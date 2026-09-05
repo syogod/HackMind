@@ -1,8 +1,12 @@
 """
 Checklist node panel.
 
-Controls: status selector, "Is Finding" toggle, notes editor,
-and the attachment pane.
+Layout:
+  - Sticky header: title + status / finding / severity controls for the node
+  - Collapsible "Guidance" section (the node's methodology text)
+  - Filter box + accordion list of sub-steps
+
+Notes and attachments live in the right pane (shared across panels).
 """
 
 from PyQt6.QtCore import pyqtSignal, Qt
@@ -19,6 +23,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
 )
 
+from hackmind import settings as _settings
 from hackmind.ui.themes import title_point_size
 from hackmind.db import node_repo
 from hackmind.db.database import Database
@@ -34,6 +39,8 @@ _STATUS_OPTIONS = [
 
 
 class CollapsibleSection(QWidget):
+    expanded_changed = pyqtSignal(bool)
+
     def __init__(self, title: str, parent=None) -> None:
         super().__init__(parent)
         self._is_expanded = True
@@ -57,11 +64,16 @@ class CollapsibleSection(QWidget):
         
     def add_widget(self, widget: QWidget) -> None:
         self._content_layout.addWidget(widget)
+
+    def set_expanded(self, expanded: bool) -> None:
+        if expanded != self._is_expanded:
+            self.toggle()
         
     def toggle(self) -> None:
         self._is_expanded = not self._is_expanded
         self._content_area.setVisible(self._is_expanded)
         self._toggle_btn.setText(f"{'▼' if self._is_expanded else '▶'} {self._toggle_btn.text()[2:]}")
+        self.expanded_changed.emit(self._is_expanded)
 
 
 class ChecklistPanel(QWidget):
@@ -86,9 +98,48 @@ class ChecklistPanel(QWidget):
         font.setBold(True)
         self._title.setFont(font)
 
+        # ── Sticky header controls (apply to the loaded node itself) ────────
+        self._status_combo = QComboBox()
+        for status, label in _STATUS_OPTIONS:
+            self._status_combo.addItem(label, userData=status)
+        self._status_combo.currentIndexChanged.connect(self._on_status_changed)
+
+        self._finding_check = QCheckBox("★ Finding")
+        self._finding_check.setObjectName("findingCheck")
+        self._finding_check.stateChanged.connect(self._on_finding_changed)
+
+        self._severity_combo = QComboBox()
+        for sev in ("info", "low", "medium", "high", "critical"):
+            self._severity_combo.addItem(sev.capitalize(), userData=sev)
+        self._severity_combo.setToolTip("Finding severity (used in the exported report)")
+        self._severity_combo.currentIndexChanged.connect(self._on_severity_changed)
+
+        header_row = QHBoxLayout()
+        header_row.addWidget(QLabel("Status:"))
+        header_row.addWidget(self._status_combo)
+        header_row.addStretch()
+        header_row.addWidget(self._severity_combo)
+        header_row.addWidget(self._finding_check)
+
+        # ── Collapsible guidance ─────────────────────────────────────────────
         self._guidance = QTextBrowser()
         self._guidance.setOpenExternalLinks(True)
-        self._guidance.setMaximumHeight(100)
+        self._guidance_section = CollapsibleSection("Guidance / Methodology")
+        self._guidance_section.add_widget(self._guidance)
+        self._guidance_section.set_expanded(
+            _settings.get_flag(_settings.KEY_CHECKLIST_GUIDANCE, True)
+        )
+        self._guidance_section.expanded_changed.connect(
+            lambda expanded: _settings.set_flag(
+                _settings.KEY_CHECKLIST_GUIDANCE,
+                expanded,
+            )
+        )
+
+        # Filter UI
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("Filter by tag or text (e.g., id:IDOR, crit)...")
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
 
         # Scrollable area for accordions
         self._scroll = QScrollArea()
@@ -101,17 +152,32 @@ class ChecklistPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
-        layout.addWidget(self._filter_edit)
         layout.addWidget(self._title)
-        layout.addWidget(self._guidance)
-        layout.addWidget(self._scroll)
+        layout.addLayout(header_row)
+        layout.addWidget(self._guidance_section)
+        layout.addWidget(self._filter_edit)
+        layout.addWidget(self._scroll, stretch=1)
 
     def load(self, node: Node) -> None:
         self._loading = True
         self._node = node
         self._title.setText(node.title)
         self._guidance.setPlainText(node.content or "")
-        self._guidance.setVisible(bool(node.content))
+        self._guidance_section.setVisible(bool(node.content))
+
+        # Header controls — block signals so load() doesn't write back
+        for w in (self._status_combo, self._finding_check, self._severity_combo):
+            w.blockSignals(True)
+        idx = self._status_combo.findData(node.status)
+        self._status_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._finding_check.setChecked(node.is_finding)
+        current_sev = next(
+            (t for t in node.scope_tags if t.lower() in node_repo.SEVERITY_TAGS), "info"
+        )
+        sev_idx = self._severity_combo.findData(current_sev)
+        self._severity_combo.setCurrentIndex(sev_idx if sev_idx >= 0 else 0)
+        for w in (self._status_combo, self._finding_check, self._severity_combo):
+            w.blockSignals(False)
 
         # Clear accordions
         while self._accordions_layout.count():
@@ -231,6 +297,35 @@ class ChecklistPanel(QWidget):
 
     def flush(self) -> None:
         pass # Notes handled in right pane now
+
+    # ── Header control handlers (loaded node) ────────────────────────────────
+    def _on_status_changed(self, _index: int) -> None:
+        if self._loading or self._node is None:
+            return
+        status = self._status_combo.currentData()
+        node_repo.set_status(self._db, self._node.id, status)
+        self._node.status = status
+        self.tree_changed.emit()
+
+    def _on_finding_changed(self, _state: int) -> None:
+        if self._loading or self._node is None:
+            return
+        checked = self._finding_check.isChecked()
+        node_repo.set_finding(self._db, self._node.id, checked)
+        self._node.is_finding = checked
+        self.tree_changed.emit()
+
+    def _on_severity_changed(self, _index: int) -> None:
+        if self._loading or self._node is None:
+            return
+        severity = self._severity_combo.currentData()
+        if severity is None:
+            return
+        node_repo.set_severity(self._db, self._node.id, severity)
+        self._node.scope_tags = [
+            t for t in self._node.scope_tags if t.lower() not in node_repo.SEVERITY_TAGS
+        ] + [severity]
+        self.tree_changed.emit()
 
     # Drag and Drop for attachments
     def dragEnterEvent(self, event) -> None:
