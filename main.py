@@ -8,7 +8,7 @@ user can create a project immediately without a manual import step.
 import sys
 from pathlib import Path
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox
 
 from hackmind.db.database import Database
 from hackmind.db import template_repo
@@ -17,23 +17,19 @@ from hackmind.engine.template_loader import load_template_from_file, TemplateVal
 from hackmind.ui.main_window import MainWindow
 from hackmind.ui.themes import apply_theme, saved_theme_name
 
-_BUNDLED_TEMPLATES = [
-    # Engagement templates (tier: engagement)
-    Path("templates/bug-bounty.yaml"),
-    Path("templates/internal-pentest.yaml"),
-    Path("templates/red-team.yaml"),
-    # Asset templates (tier: asset)
-    Path("templates/web-app.yaml"),
-    Path("templates/android-mobile.yaml"),
-    Path("templates/thick-client.yaml"),
-    Path("templates/api-testing.yaml"),
-    Path("templates/internal-network.yaml"),
-    Path("templates/domain-controller.yaml"),
-    Path("templates/host.yaml"),
-    Path("templates/database.yaml"),
-    Path("templates/network-service.yaml"),
-    Path("templates/ios-mobile.yaml"),
-]
+def _get_bundled_templates() -> list[Path]:
+    templates_dir = Path(__file__).parent / "templates"
+    if templates_dir.exists():
+        return sorted(list(templates_dir.glob("*.yaml")) + list(templates_dir.glob("*.yml")))
+    return [
+        Path("templates/bug-bounty.yaml"),
+        Path("templates/internal-pentest.yaml"),
+        Path("templates/red-team.yaml"),
+        Path("templates/web-app.yaml"),
+        Path("templates/android-mobile.yaml"),
+        Path("templates/thick-client.yaml"),
+        Path("templates/api-testing.yaml"),
+    ]
 
 
 def _ensure_bundled_templates(db: Database) -> None:
@@ -47,7 +43,7 @@ def _ensure_bundled_templates(db: Database) -> None:
     """
     existing = {(t["name"], t["version"]): t["id"] for t in template_repo.list_templates(db)}
 
-    for path in _BUNDLED_TEMPLATES:
+    for path in _get_bundled_templates():
         if not path.exists():
             continue
         try:
@@ -70,11 +66,33 @@ def main() -> None:
     app.setApplicationVersion("0.1.0")
     apply_theme(app, saved_theme_name())
 
-    db = Database.open()
+    db = None
+    password = None
+    
+    # Attempt to open the database
+    while db is None:
+        try:
+            db = Database.open(password=password)
+        except ValueError as e:
+            if "Incorrect password" in str(e):
+                password, ok = QInputDialog.getText(
+                    None, "Database Encrypted", 
+                    "This database is encrypted. Please enter the master password:",
+                    QLineEdit.EchoMode.Password
+                )
+                if not ok:
+                    sys.exit(0)
+            else:
+                QMessageBox.critical(None, "Database Error", str(e))
+                sys.exit(1)
+        except Exception as e:
+            QMessageBox.critical(None, "Fatal Error", f"Could not open database: {e}")
+            sys.exit(1)
+
     _ensure_bundled_templates(db)
     tree_engine.resync_scope_tags(db)
 
-    window = MainWindow(db)
+    window = MainWindow(db, password=password)
     window.show()
 
     exit_code = app.exec()

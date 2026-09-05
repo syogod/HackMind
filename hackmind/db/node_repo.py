@@ -85,20 +85,30 @@ def get_node(db: Database, node_id: str) -> Optional[Node]:
 
 def get_children(
     db: Database,
-    parent_id: str,
+    parent_id: Optional[str],
+    project_id: Optional[str] = None,
     include_soft_deleted: bool = False,
 ) -> list[Node]:
     """Return direct children of a node, ordered by position."""
-    if include_soft_deleted:
-        rows = db.conn.execute(
-            "SELECT * FROM nodes WHERE parent_id = ? ORDER BY position",
-            (parent_id,),
-        ).fetchall()
+    sql = "SELECT * FROM nodes WHERE "
+    params = []
+    
+    if parent_id is None:
+        sql += "parent_id IS NULL "
     else:
-        rows = db.conn.execute(
-            "SELECT * FROM nodes WHERE parent_id = ? AND soft_deleted = 0 ORDER BY position",
-            (parent_id,),
-        ).fetchall()
+        sql += "parent_id = ? "
+        params.append(parent_id)
+        
+    if project_id:
+        sql += "AND project_id = ? "
+        params.append(project_id)
+        
+    if not include_soft_deleted:
+        sql += "AND soft_deleted = 0 "
+        
+    sql += "ORDER BY position"
+    
+    rows = db.conn.execute(sql, tuple(params)).fetchall()
     return [_row_to_node(r) for r in rows]
 
 
@@ -225,6 +235,39 @@ def set_finding(db: Database, node_id: str, is_finding: bool) -> None:
         db.conn.execute(
             "UPDATE nodes SET is_finding = ? WHERE id = ?",
             (int(is_finding), node_id),
+        )
+
+
+# Severity levels recognised by the report exporter, stored as scope tags.
+SEVERITY_TAGS = ("critical", "high", "medium", "low", "info")
+
+
+def set_severity(db: Database, node_id: str, severity: str) -> None:
+    """
+    Set a node's severity, managed as a scope tag.
+
+    Replaces any existing severity tag with the new one, leaving all other
+    scope tags untouched. Valid severities: critical, high, medium, low, info.
+    """
+    sev = severity.lower().strip()
+    if sev not in SEVERITY_TAGS:
+        raise ValueError(f"Invalid severity '{severity}'. Expected one of: {SEVERITY_TAGS}")
+
+    row = db.conn.execute(
+        "SELECT scope_tags FROM nodes WHERE id = ?", (node_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Node '{node_id}' not found.")
+
+    tags = [
+        t for t in json.loads(row["scope_tags"] or "[]")
+        if t.lower() not in SEVERITY_TAGS
+    ]
+    tags.append(sev)
+    with db.conn:
+        db.conn.execute(
+            "UPDATE nodes SET scope_tags = ? WHERE id = ?",
+            (json.dumps(tags), node_id),
         )
 
 

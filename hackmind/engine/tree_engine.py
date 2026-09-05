@@ -17,6 +17,10 @@ Public API
       Add a manually-created node as a child of any existing node.
       Manual nodes are not tied to any template and survive template exports.
 
+  answer_asset_type(db, question_node_id, db_template_id)
+      Record the asset-type answer and instantiate the chosen template
+      under the asset node.
+
   answer_question(db, question_node_id, option_key)
       Record an answer and expand/restore/soft-delete subtrees accordingly.
       The template is resolved from the node's stored template_id.
@@ -29,15 +33,20 @@ from __future__ import annotations
 
 import json
 
-from hackmind.db import node_repo, template_repo
+from hackmind.db import node_repo, template_repo, project_repo
 from hackmind.db.database import Database
 from hackmind.engine.template_loader import load_template_from_db_row
 from hackmind.models.types import (
     Node,
     NodeType,
-    Template,
     TemplateNode,
 )
+
+# Sentinel template_node_id for the bootstrap "Asset type?" question.
+ASSET_TYPE_NODE_ID = "__asset_type__"
+
+# Title shown to the user for the bootstrap question.
+_ASSET_TYPE_QUESTION_TITLE = "What type of asset is this?"
 
 # Display order when sorting spawned siblings: questions first, then info, then checklists.
 _TYPE_SORT_ORDER: dict[NodeType, int] = {
@@ -67,6 +76,24 @@ def instantiate_project(
     If *template_id* is provided (an engagement template), its nodes are
     instantiated directly under the root asset.
     """
+    project = project_repo.get_project(db, project_id)
+    variables = project.variables if project else {}
+    changed = False
+    if "target_name" not in variables:
+        variables["target_name"] = target_name
+        changed = True
+    if "target_url" not in variables:
+        # If target looks like a domain, make it a URL.
+        if "." in target_name and "://" not in target_name:
+            variables["target_url"] = f"https://{target_name}"
+        else:
+            variables["target_url"] = target_name
+        changed = True
+
+    if changed and project:
+        project.variables = variables
+        project_repo.update_project(db, project)
+
     root = Node(
         project_id=project_id,
         parent_id=None,
@@ -86,6 +113,7 @@ def instantiate_project(
                     db, project_id, tnode,
                     parent_id=root.id, position=i,
                     template_id=template_id,
+                    variables=variables,
                 )
 
 
@@ -100,6 +128,12 @@ def add_asset(
     Create an asset node. If *template_id* is provided, the chosen methodology
     template is instantiated directly under the new asset.
     """
+    project = project_repo.get_project(db, project_id)
+    variables = project.variables if project else {}
+
+    # Handle interpolation for the asset title itself
+    title = _interpolate(title, variables)
+
     siblings = (
         node_repo.get_children(db, parent_node_id)
         if parent_node_id
@@ -124,7 +158,18 @@ def add_asset(
                 db, project_id, tnode,
                 parent_id=asset_node.id, position=i,
                 template_id=template_id,
+                variables=variables,
             )
+    else:
+        bootstrap_q = Node(
+            project_id=project_id,
+            parent_id=asset_node.id,
+            type=NodeType.QUESTION,
+            title=_ASSET_TYPE_QUESTION_TITLE,
+            template_node_id=ASSET_TYPE_NODE_ID,
+            position=0,
+        )
+        node_repo.insert_node(db, bootstrap_q)
 
     return asset_node
 
@@ -142,6 +187,12 @@ def add_node(
     Manual nodes have no template_id or template_node_id — they are not tied
     to any template and are included verbatim in template exports.
     """
+    project = project_repo.get_project(db, project_id)
+    variables = project.variables if project else {}
+
+    title = _interpolate(title, variables)
+    content = _interpolate(content, variables)
+
     siblings = node_repo.get_children(db, parent_node_id)
     node = Node(
         project_id=project_id,
@@ -153,6 +204,73 @@ def add_node(
     )
     node_repo.insert_node(db, node)
     return node
+
+
+def answer_asset_type(
+    db: Database,
+    question_node_id: str,
+    db_template_id: str,
+) -> None:
+    """
+    Record the asset-type selection and instantiate the chosen template
+    directly under the asset node that owns the bootstrap question.
+
+    `db_template_id` is the PK of a row in the templates table.
+
+    Three cases:
+      1. First answer  → load template, instantiate nodes under the asset.
+      2. Answer changed → soft-delete current children, instantiate new ones
+                          (or restore if previously selected).
+      3. Answer reverted → restore the previously soft-deleted subtree.
+    """
+    question_node = node_repo.get_node(db, question_node_id)
+    if question_node is None:
+        raise ValueError(f"Node '{question_node_id}' not found.")
+
+    project = project_repo.get_project(db, question_node.project_id)
+    variables = project.variables if project else {}
+
+    current_answer = node_repo.get_answer(db, question_node_id)
+
+    # Nothing to do if the same template is re-selected.
+    if current_answer is not None and current_answer.option_key == db_template_id:
+        return
+
+    # Soft-delete currently active children (previous template nodes).
+    if current_answer is not None:
+        active_children = node_repo.get_children(
+            db, question_node_id, include_soft_deleted=False
+        )
+        for child in active_children:
+            node_repo.soft_delete_subtree(db, child.id)
+
+    # Check whether we can restore a previously soft-deleted subtree.
+    soft_children = [
+        c for c in node_repo.get_children(
+            db, question_node_id, include_soft_deleted=True
+        )
+        if c.soft_deleted and c.template_id == db_template_id
+    ]
+
+    if soft_children:
+        for child in soft_children:
+            node_repo.restore_subtree(db, child.id)
+    else:
+        # Instantiate the template fresh.
+        raw = template_repo.get_template_raw(db, db_template_id)
+        if raw is None:
+            raise ValueError(f"Template '{db_template_id}' not found in DB.")
+        template = load_template_from_db_row(raw)
+
+        for i, tnode in enumerate(_sort_tnodes(template.nodes)):
+            _instantiate_node(
+                db, question_node.project_id, tnode,
+                parent_id=question_node_id, position=i,
+                template_id=db_template_id,
+                variables=variables,
+            )
+
+    node_repo.set_answer(db, question_node_id, db_template_id)
 
 
 def answer_question(
@@ -176,6 +294,9 @@ def answer_question(
     if question_node is None:
         raise ValueError(f"Node '{question_node_id}' not found.")
 
+    project = project_repo.get_project(db, question_node.project_id)
+    variables = project.variables if project else {}
+
     if question_node.template_id is None:
         raise ValueError(
             f"Node '{question_node_id}' has no template_id; "
@@ -189,7 +310,7 @@ def answer_question(
         )
     template = load_template_from_db_row(raw)
 
-    tnode = _find_template_node(template, question_node.template_node_id)
+    tnode = template.get_node(question_node.template_node_id)
     if tnode is None:
         raise ValueError(
             f"Template node '{question_node.template_node_id}' not found "
@@ -238,6 +359,7 @@ def answer_question(
                     db, question_node.project_id, child_tnode,
                     parent_id=question_node_id, position=i,
                     template_id=question_node.template_id,
+                    variables=variables,
                 )
 
     node_repo.set_answer(db, question_node_id, option_key)
@@ -289,8 +411,19 @@ def resync_scope_tags(db: Database) -> None:
 
         with db.conn:
             for nr in node_rows:
-                desired = tag_map.get(nr["template_node_id"], [])
+                desired = list(tag_map.get(nr["template_node_id"], []))
                 current = json.loads(nr["scope_tags"] or "[]")
+                # Preserve the user-set severity tag — it is user data, not
+                # template data, and must survive template resyncs.
+                user_severity = next(
+                    (t for t in current if t.lower() in node_repo.SEVERITY_TAGS),
+                    None,
+                )
+                if user_severity:
+                    desired = [
+                        t for t in desired if t.lower() not in node_repo.SEVERITY_TAGS
+                    ]
+                    desired.append(user_severity)
                 if desired != current:
                     db.conn.execute(
                         "UPDATE nodes SET scope_tags = ? WHERE id = ?",
@@ -331,18 +464,22 @@ def _instantiate_node(
     parent_id: str | None,
     position: int,
     template_id: str | None = None,
+    variables: dict[str, str] | None = None,
 ) -> Node:
     """
     Create a single DB node from a TemplateNode.
     Recursively creates children for non-question nodes.
     Question nodes are left childless until answered.
     """
+    title = _interpolate(tnode.title, variables)
+    content = _interpolate(tnode.content, variables)
+
     node = Node(
         project_id=project_id,
         parent_id=parent_id,
         type=tnode.type,
-        title=tnode.title,
-        content=tnode.content,
+        title=title,
+        content=content,
         template_node_id=tnode.id,
         template_id=template_id,
         position=position,
@@ -357,34 +494,18 @@ def _instantiate_node(
                 db, project_id, child,
                 parent_id=node.id, position=i,
                 template_id=template_id,
+                variables=variables,
             )
 
     return node
 
 
-def _find_template_node(
-    template: Template, template_node_id: str | None
-) -> TemplateNode | None:
-    """Recursively search the template tree for a node by ID."""
-    if template_node_id is None:
-        return None
-    for tnode in template.nodes:
-        found = _search_node(tnode, template_node_id)
-        if found:
-            return found
-    return None
+def _interpolate(text: str, variables: dict[str, str] | None) -> str:
+    if not variables:
+        return text
+    for k, v in variables.items():
+        placeholder = f"{{{{{k}}}}}"
+        text = text.replace(placeholder, v)
+    return text
 
 
-def _search_node(tnode: TemplateNode, target_id: str) -> TemplateNode | None:
-    if tnode.id == target_id:
-        return tnode
-    for opt in tnode.options:
-        for child in opt.children:
-            found = _search_node(child, target_id)
-            if found:
-                return found
-    for child in tnode.children:
-        found = _search_node(child, target_id)
-        if found:
-            return found
-    return None

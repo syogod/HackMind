@@ -1,5 +1,5 @@
 name: "Bug Bounty Program"
-version: "1.0.0"
+version: "1.2.0"
 author: "HackMind"
 tier: engagement
 description: >
@@ -111,8 +111,8 @@ nodes:
         title: "Query crt.sh"
         content: |
           - https://crt.sh/?q=%25.<domain>&output=json
-          - curl -s "https://crt.sh/?q=%25.target.com&output=json" | jq -r '.[].name_value' | sort -u
-          - Look for wildcard certs (*.internal.target.com) — reveals subdomain patterns
+          - curl -s "https://crt.sh/?q=%25.{{target_name}}&output=json" | jq -r '.[].name_value' | sort -u
+          - Look for wildcard certs (*.internal.{{target_name}}) — reveals subdomain patterns
           - Check the issuer field — internal CAs can reveal internal PKI hostnames
 
       - id: ct_tools
@@ -137,11 +137,11 @@ nodes:
         title: "Passive enumeration (no direct contact)"
         content: |
           Run all of these and merge output:
-          - subfinder -d target.com -all -recursive -o subfinder.txt
-          - amass enum -passive -d target.com -o amass_passive.txt
-          - assetfinder --subs-only target.com
-          - github-subdomains -d target.com -t <GITHUB_TOKEN>
-          - VirusTotal: https://www.virustotal.com/gui/domain/target.com/relations
+          - subfinder -d {{target_name}} -all -recursive -o subfinder.txt
+          - amass enum -passive -d {{target_name}} -o amass_passive.txt
+          - assetfinder --subs-only {{target_name}}
+          - github-subdomains -d {{target_name}} -t <GITHUB_TOKEN>
+          - VirusTotal: https://www.virustotal.com/gui/domain/{{target_name}}/relations
           - SecurityTrails, Shodan, Censys (manual or API)
           - Merge and deduplicate: cat *.txt | sort -u > all_subs.txt
 
@@ -149,7 +149,7 @@ nodes:
         type: checklist
         title: "Active DNS brute-force"
         content: |
-          - puredns brute /opt/SecLists/Discovery/DNS/dns-Jhaddix.txt target.com -r resolvers.txt -w brute.txt
+          - puredns brute /opt/SecLists/Discovery/DNS/dns-Jhaddix.txt {{target_name}} -r resolvers.txt -w brute.txt
           - puredns resolve all_subs.txt -r resolvers.txt -w resolved.txt
           - dnsx -l resolved.txt -a -cname -resp -o dnsx_out.txt
           - Merge brute results back into all_subs.txt
@@ -230,28 +230,28 @@ nodes:
         type: checklist
         title: "Google / Bing dorks"
         content: |
-          - site:target.com filetype:pdf OR filetype:xlsx OR filetype:env OR filetype:sql
-          - site:target.com inurl:admin OR inurl:login OR inurl:dashboard OR inurl:portal
-          - site:target.com "index of /" OR "directory listing"
-          - site:target.com ext:log OR ext:bak OR ext:conf OR ext:config
-          - site:target.com "internal use only" OR "not for public" OR "confidential"
-          - intitle:"500 Internal Server Error" site:target.com
-          - "target.com" "api_key" OR "secret_key" OR "password" site:pastebin.com
-          - "target.com" "api_key" OR "secret" OR "token" site:github.com
+          - site:{{target_name}} filetype:pdf OR filetype:xlsx OR filetype:env OR filetype:sql
+          - site:{{target_name}} inurl:admin OR inurl:login OR inurl:dashboard OR inurl:portal
+          - site:{{target_name}} "index of /" OR "directory listing"
+          - site:{{target_name}} ext:log OR ext:bak OR ext:conf OR ext:config
+          - site:{{target_name}} "internal use only" OR "not for public" OR "confidential"
+          - intitle:"500 Internal Server Error" site:{{target_name}}
+          - "{{target_name}}" "api_key" OR "secret_key" OR "password" site:pastebin.com
+          - "{{target_name}}" "api_key" OR "secret" OR "token" site:github.com
 
       - id: osint_shodan_censys
         type: checklist
         title: "Shodan / Censys / FOFA"
         content: |
           Shodan:
-          - hostname:target.com
+          - hostname:{{target_name}}
           - org:"Target Corp"
-          - ssl:"target.com"
-          - ssl.cert.subject.cn:target.com
+          - ssl:"{{target_name}}"
+          - ssl.cert.subject.cn:{{target_name}}
           Note: exposed services, default banners, SSL cert SANs for new subdomains
 
           Censys:
-          - parsed.names: target.com
+          - parsed.names: {{target_name}}
           - autonomous_system.name: "Target Corp"
 
           FOFA / Netlas / ZoomEye — cross-check for assets Shodan misses
@@ -265,16 +265,16 @@ nodes:
           - LinkedIn — enumerate engineering/security team for tech stack clues
           - Have I Been Pwned (API) — check corporate email domains in breach data
           - dehashed.com — search for domain in credential dumps
-          - theHarvester -d target.com -b all
+          - theHarvester -d {{target_name}} -b all
 
       - id: osint_wayback
         type: checklist
         title: "Wayback Machine / archive mining"
         content: |
-          - gau target.com | sort -u > gau_urls.txt  (fetches wayback + otx + commoncrawl)
-          - waybackurls target.com >> gau_urls.txt
+          - gau {{target_name}} | sort -u > gau_urls.txt  (fetches wayback + otx + commoncrawl)
+          - waybackurls {{target_name}} >> gau_urls.txt
           - grep for: /api/, /admin/, /debug/, /test/, /backup/, .env, .git, .DS_Store
-          - katana -u target.com -jc -d 3 -o katana.txt  (also crawls JS endpoints)
+          - katana -u {{target_name}} -jc -d 3 -o katana.txt  (also crawls JS endpoints)
           - Check for old endpoints that may have been removed but still respond
 
   # ===========================================================================
@@ -293,7 +293,7 @@ nodes:
             content: |
               - github.com/<org> — browse repos, note languages and frameworks
               - gitlab.com/<org>
-              - Search: site:github.com "target.com" OR "Target Corp"
+              - Search: site:github.com "{{target_name}}" OR "Target Corp"
               - github-search: org:<org> — list all public repos
               - Note forks of internal-looking repos (may expose old commits)
 
@@ -319,7 +319,7 @@ nodes:
               - org:<org> "access_token" OR "auth_token" OR "bearer"
               - org:<org> "BEGIN RSA PRIVATE KEY" OR "BEGIN OPENSSH PRIVATE KEY"
               - org:<org> filename:.env OR filename:config.yml OR filename:secrets.yml
-              - org:<org> "internal.target.com" OR "staging.target.com"
+              - org:<org> "internal.{{target_name}}" OR "staging.{{target_name}}"
               - Also search for the domain without the org filter — contractors and ex-employees
                 sometimes commit code referencing internal endpoints
 
@@ -386,3 +386,72 @@ nodes:
           - Any secrets or credentials found in code / pastes
           - Tech stack patterns across assets (same framework everywhere = one bug hits all)
           - Login portals with default credentials worth trying early
+
+  # ===========================================================================
+  # RECON-TO-EXPLOIT TRICKS (from HowToHunt)
+  # ===========================================================================
+  - id: recon_exploit_tricks
+    type: info
+    title: "Recon-to-Exploit Tricks"
+    content: "High-signal bypass and takeover techniques to run after asset discovery."
+    children:
+      - id: takeover_deep
+        type: checklist
+        title: "Deep subdomain takeover sweep"
+        scope_tags: [high, takeover]
+        content: |
+          - cat domains.txt | while read d; do dig +short CNAME $d; done | sort -u
+          - Any CNAME to a claimable service (S3, Azure, Heroku, GitHub Pages, Fastly,
+            Shopify, Tilda, Unbounce, Readme.io, Surge, Webflow, Helpjuice...) -> check
+            fingerprints: github.com/EdOverflow/can-i-take-over-xyz
+          - Automate: subzy run --targets resolved.txt / subjack -w hosts
+          - CNAME pointing to a purchasable (unregistered) domain = instant win
+          - HTTP fingerprints of unclaimed services: "NoSuchBucket", "There isn't a
+            GitHub Pages site here", "Fastly error: unknown domain"
+
+      - id: status_code_bypass
+        type: checklist
+        title: "403 / status code bypass"
+        scope_tags: [bypass]
+        content: |
+          Path variants against the blocked path:
+          - /secret/./ , /secret/../secret , //secret , /./secret , /%2e/secret
+          - /%2f/secret , /secret? , /secret/ , /secret..;/  (Tomcat)
+          Protocol swap: https:// 403 -> http:// 200
+          Headers: X-Original-Url / X-Rewrite-URL / X-Forwarded-For: 127.0.0.1 /
+          X-Custom-IP-Authorization: 127.0.0.1 / Client-IP / X-Host
+          Automate: 4-ZERO-3 or 403bypasser; also try the same path on the origin IP
+          (found via DNS history / crt.sh SANs) with Host: {{target_name}}
+
+      - id: origin_ip
+        type: checklist
+        title: "Origin IP discovery behind WAF/CDN"
+        scope_tags: [recon, waf]
+        content: |
+          - viewdns.info/iphistory + securitytrails: A records before the CDN was added
+          - crt.sh SANs on certs issued to the same org
+          - Shodan: ssl.cert.subject.CN:"{{target_name}}"
+          - Confirm: curl -sk -H "Host: {{target_name}}" https://<ip>/ returns the app
+          - Then hit /admin, /api, /login directly on the origin — WAF rules often absent
+
+      - id: broken_link_hijack
+        type: checklist
+        title: "Broken link hijacking"
+        scope_tags: [medium, recon]
+        content: |
+          - npx broken-link-checker -rof --filter-level 3 https://{{target_name}}/
+          - Dead external links to social profiles / docs / CDNs
+          - Claim the dead handle or expired domain, host a phishing page under a
+            link the target's own site endorses
+          - Also sweep wayback-extracted external links with httpx
+
+      - id: rate_limit_bypass
+        type: checklist
+        title: "Rate limit bypass battery"
+        scope_tags: [medium, bypass]
+        content: |
+          - Rotate per-request: X-Forwarded-For / X-Real-IP / X-Client-IP /
+            True-Client-IP / Client-IP with random IPs
+          - Verb swap GET<->POST, path casing (/Login), trailing slash, %2e encoding
+          - Repeat the limited parameter (code=a&code=b) or send it as an array
+          - Fresh session/cookie per request when limits are per-session

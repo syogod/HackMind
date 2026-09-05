@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from hackmind.ui.themes import title_point_size
 from hackmind.db import node_repo, template_repo
 from hackmind.engine import tree_engine
 from hackmind.ui.app_state import AppState
@@ -33,7 +34,7 @@ class QuestionPanel(QWidget):
         self._title = QLabel()
         self._title.setWordWrap(True)
         font = self._title.font()
-        font.setPointSize(14)
+        font.setPointSize(title_point_size())
         font.setBold(True)
         self._title.setFont(font)
 
@@ -98,7 +99,7 @@ class QuestionPanel(QWidget):
         from hackmind.engine.template_loader import load_template_from_db_row
         template = load_template_from_db_row(raw)
 
-        tnode = tree_engine._find_template_node(template, self._node.template_node_id)
+        tnode = template.get_node(self._node.template_node_id)
         if tnode is None:
             return
 

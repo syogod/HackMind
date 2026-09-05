@@ -40,11 +40,13 @@ KEY_THEME          = "ui/theme"
 KEY_DB_PATH        = "db/path"
 KEY_AUTOSAVE_DELAY = "editor/autosave_delay_ms"
 KEY_GEOMETRY       = "ui/geometry"
+KEY_FONT_SIZE      = "ui/base_font_size"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
 DEFAULT_THEME          = "Dark"
 DEFAULT_AUTOSAVE_DELAY = 800   # milliseconds
+DEFAULT_FONT_SIZE      = 13    # px — matches the original stylesheet value
 
 
 def _default_db_path() -> str:
@@ -68,6 +70,69 @@ def set_theme(name: str) -> None:
     """Persist the chosen theme name."""
     s = _qs()
     s.setValue(KEY_THEME, name)
+
+
+# ── Base font size ────────────────────────────────────────────────────────────
+
+def base_font_size() -> int:
+    """
+    Return the base UI font size in pixels.
+    Defaults to 13 px. Valid range for the UI is 9–24 px.
+    """
+    raw = _qs().value(KEY_FONT_SIZE, DEFAULT_FONT_SIZE)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_FONT_SIZE
+
+
+def set_base_font_size(px: int) -> None:
+    """Persist the base UI font size in pixels."""
+    _qs().setValue(KEY_FONT_SIZE, int(px))
+
+
+# ── Misc UI state flags ───────────────────────────────────────────────────────
+
+KEY_CHECKLIST_GUIDANCE = "ui/checklist_guidance_expanded"
+KEY_RIGHT_SPLITTER = "ui/right_splitter_sizes"
+KEY_MAIN_SPLITTER = "ui/main_splitter_sizes"
+KEY_TREE_FILTER = "ui/tree_filter_mode"
+KEY_NOTE_PREVIEW = "ui/note_preview_visible"
+
+
+def get_flag(key: str, default: bool) -> bool:
+    """Read a boolean UI-state flag (e.g. collapsible sections)."""
+    raw = _qs().value(key, default)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).lower() in ("1", "true", "yes")
+
+
+def set_flag(key: str, value: bool) -> None:
+    """Persist a boolean UI-state flag."""
+    _qs().setValue(key, value)
+
+
+def get_flag_str(key: str, default: str) -> str:
+    """Read a string UI-state value (e.g. the tree quick-filter mode)."""
+    raw = _qs().value(key, default)
+    return str(raw) if raw is not None else default
+
+
+def get_sizes(key: str) -> list[int] | None:
+    """Read a persisted splitter size list, or None."""
+    raw = _qs().value(key)
+    if raw is None:
+        return None
+    try:
+        return [int(x) for x in raw.split(",")]
+    except (AttributeError, ValueError):
+        return None
+
+
+def set_sizes(key: str, sizes: list[int]) -> None:
+    """Persist a splitter size list."""
+    _qs().setValue(key, ",".join(str(s) for s in sizes))
 
 
 # ── Database path ─────────────────────────────────────────────────────────────

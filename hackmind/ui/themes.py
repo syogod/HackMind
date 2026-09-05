@@ -206,14 +206,18 @@ def _arrow_paths(color: str) -> tuple[str, str]:
     return right.replace("\\", "/"), down.replace("\\", "/")
 
 
-def _build_stylesheet(p: Palette) -> str:
+def _build_stylesheet(p: Palette, font_size: int | None = None) -> str:
+    from hackmind import settings as _settings
+    if font_size is None:
+        font_size = _settings.base_font_size()
+    group_font_size = max(9, font_size - 1)
     arrow_right, arrow_down = _arrow_paths(p.text_secondary)
     return f"""
 /* ── Base ─────────────────────────────────────────────────────────────── */
 QWidget {{
     background-color: {p.bg_base};
     color: {p.text_primary};
-    font-size: 13px;
+    font-size: {font_size}px;
 }}
 QMainWindow, QDialog {{
     background-color: {p.bg_base};
@@ -301,7 +305,7 @@ QGroupBox {{
     padding: 10px 8px 8px 8px;
     color: {p.text_secondary};
     font-weight: bold;
-    font-size: 12px;
+    font-size: {group_font_size}px;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
@@ -509,7 +513,26 @@ def apply_theme(app: QApplication, name: str) -> None:
     from hackmind import settings as _settings
     palette = THEMES.get(name, THEMES[_settings.DEFAULT_THEME])
     app.setStyleSheet(_build_stylesheet(palette))
+    # Keep the application font in sync with the base font-size setting so that
+    # code reading QFont.pointSize() (e.g. panel headings) sees a sane value —
+    # QSS pixel sizes alone leave pointSize() at -1.
+    font_size = _settings.base_font_size()
+    font = app.font()
+    font.setPointSize(round(font_size * 0.75))
+    app.setFont(font)
     _settings.set_theme(name)
+
+
+def title_point_size(offset: int = 4) -> int:
+    """
+    Point size for panel headings, derived from the base font-size setting.
+
+    The base size is stored in pixels (QSS convention); panel headings were
+    historically 14 pt (welcome panel 24 pt) on a 13 px base, so the offsets
+    reproduce those proportions at any configured size.
+    """
+    from hackmind import settings as _settings
+    return max(8, round(_settings.base_font_size() * 0.75) + offset)
 
 
 def saved_theme_name() -> str:

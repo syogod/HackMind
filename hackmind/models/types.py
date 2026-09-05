@@ -76,6 +76,7 @@ class Project:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    variables: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -114,7 +115,8 @@ class Attachment:
     node_id: str
     filename: str
     mime_type: str
-    data: bytes
+    data: Optional[bytes] = None
+    relative_path: Optional[str] = None
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: Optional[datetime] = None
 
@@ -161,3 +163,23 @@ class Template:
     tier: str = "asset"           # "engagement" | "asset"
     nodes: list[TemplateNode] = field(default_factory=list)
     source_file: Optional[str] = None
+
+    # Flattened lookup for O(1) access to any node in the tree.
+    # Keyed by TemplateNode.id.
+    _nodes_lookup: dict[str, TemplateNode] = field(default_factory=dict, init=False, repr=False)
+
+    def initialize_lookup(self) -> None:
+        """Populate the internal O(1) lookup table from the tree structure."""
+        self._nodes_lookup = {}
+        self._walk_and_index(self.nodes)
+
+    def get_node(self, node_id: str) -> Optional[TemplateNode]:
+        """Return a node by ID in O(1) time."""
+        return self._nodes_lookup.get(node_id)
+
+    def _walk_and_index(self, nodes: list[TemplateNode]) -> None:
+        for tnode in nodes:
+            self._nodes_lookup[tnode.id] = tnode
+            for opt in tnode.options:
+                self._walk_and_index(opt.children)
+            self._walk_and_index(tnode.children)

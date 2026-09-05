@@ -33,6 +33,7 @@ from hackmind.db.database import Database
 from hackmind.db.project_repo import create_project
 from hackmind.engine.template_loader import load_template_from_string
 from hackmind.engine.tree_engine import (
+    ASSET_TYPE_NODE_ID,
     add_asset,
     answer_question,
     clear_question,
@@ -159,9 +160,12 @@ def test_add_asset_creates_asset_node(
 def test_add_asset_without_template_has_no_children(
     db: Database, proj: Project
 ) -> None:
-    """A bare asset (no template chosen) has no children."""
+    """A bare asset (no template chosen) gets a bootstrap asset-type question."""
     asset = add_asset(db, proj.id, None, "bare.com")
-    assert node_repo.get_children(db, asset.id) == []
+    children = node_repo.get_children(db, asset.id)
+    assert len(children) == 1
+    assert children[0].type == NodeType.QUESTION
+    assert children[0].template_node_id == ASSET_TYPE_NODE_ID
 
 
 def test_add_asset_with_template_instantiates_top_level(
@@ -442,3 +446,23 @@ def test_answering_question_on_one_asset_does_not_affect_other(
 
     rq2 = node_repo.get_children(db, asset2.id)[0]
     assert node_repo.get_answer(db, rq2.id) is None
+
+
+def test_resync_scope_tags_preserves_user_severity(
+    db: Database, proj: Project, db_template_id: str
+) -> None:
+    """Startup template resync must not wipe the user-set severity tag."""
+    from hackmind.engine import tree_engine as te
+
+    asset = _setup_asset(db, proj, db_template_id, "sev.com")
+    rq = node_repo.get_children(db, asset.id)[0]
+    answer_question(db, rq.id, "webapp")
+
+    # Find an instantiated checklist node and set a user severity on it.
+    checklist = _node_by_tid(db, proj.id, "check_recon")
+    node_repo.set_severity(db, checklist.id, "critical")
+
+    te.resync_scope_tags(db)
+
+    fetched = node_repo.get_node(db, checklist.id)
+    assert "critical" in fetched.scope_tags
